@@ -36,6 +36,7 @@ export default function ExpenseManager({
 }) {
   const canEdit = permissionLevel === 'edit';
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [totalCount, setTotalCount] = useState(0);       // 【新增】服务端返回的总数
   const [loading, setLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -54,15 +55,39 @@ export default function ExpenseManager({
   const [pageSize, setPageSize] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
 
-  useEffect(() => { setCurrentPage(1); }, [searchFilters, expenses, pageSize]);
+  // Reset page on filter change + auto-refetch
+  useEffect(() => { setCurrentPage(1); fetchExpenses(); }, [searchFilters]);
+  useEffect(() => { fetchExpenses(); }, [currentPage, pageSize]);
 
+  // 【优化】使用服务端分页 + 服务端过滤，替代原来 select('*') 全量拉取
   const fetchExpenses = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    const from = (currentPage - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabase
       .from('expenses')
-      .select('*')
-      .order('occurred_at', { ascending: false });
-    if (!error && data) setExpenses(data as Expense[]);
+      .select('*', { count: 'exact' })
+      .order('occurred_at', { ascending: false })
+      .range(from, to);
+
+    // 搜索条件转为服务端过滤
+    const { expense_type, project_name, status, date_start, date_end } = searchFilters;
+    if (expense_type) query = query.eq('expense_type', expense_type);
+    if (status) query = query.eq('status', status);
+    if (project_name) query = query.ilike('project_name', `%${project_name}%`);
+    if (date_start) query = query.gte('occurred_at', date_start);
+    if (date_end) query = query.lte('occurred_at', date_end);
+
+    const { data, count, error } = await query;
+    if (error) {
+      console.error('Fetch expenses error:', error);
+      setExpenses([]);
+      setTotalCount(0);
+    } else {
+      setExpenses((data ?? []) as Expense[]);
+      setTotalCount(count ?? 0);
+    }
     setLoading(false);
   };
 
@@ -79,30 +104,21 @@ export default function ExpenseManager({
     });
   };
 
-  const filtered = useMemo(() => {
-    return expenses.filter(e => {
-      if (searchFilters.expense_type && e.expense_type !== searchFilters.expense_type) return false;
-      if (searchFilters.status && e.status !== searchFilters.status) return false;
-      if (searchFilters.project_name && !e.project_name?.toLowerCase().includes(searchFilters.project_name.toLowerCase())) return false;
-      if (searchFilters.date_start && e.occurred_at && e.occurred_at < searchFilters.date_start) return false;
-      if (searchFilters.date_end   && e.occurred_at && e.occurred_at > searchFilters.date_end)   return false;
-      return true;
-    });
-  }, [expenses, searchFilters]);
+  useEffect(() => { fetchExpenses(); }, []); // 初始加载
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const paginated  = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  // 【优化】服务端已处理全部过滤+分页，直接透传
+  const displayExpenses = expenses;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const totalCNY = displayExpenses.reduce((sum, e) => sum + (e.cny_amount ?? e.amount ?? 0), 0);
 
-  const totalCNY = filtered.reduce((sum, e) => sum + (e.cny_amount ?? e.amount ?? 0), 0);
-
-  // Group by type for summary
+  // Group by type for summary（基于当前页数据）
   const typeSummary = useMemo(() => {
     const map: Record<string, number> = {};
-    filtered.forEach(e => {
+    displayExpenses.forEach(e => {
       map[e.expense_type] = (map[e.expense_type] || 0) + (e.cny_amount ?? e.amount ?? 0);
     });
     return map;
-  }, [filtered]);
+  }, [displayExpenses]);
 
   const openNew = () => {
     setEditingId(null);
@@ -168,8 +184,23 @@ export default function ExpenseManager({
     fetchExpenses();
   };
 
-  const handleExport = () => {
-    const rows = filtered.map(e => ({
+  const handleExport = async () => {
+    // 导出当前筛选条件下的全部数据
+    let exportList: Expense[];
+    if (totalCount <= pageSize) {
+      exportList = displayExpenses;
+    } else {
+      let query = supabase.from('expenses').select('*').order('occurred_at', { ascending: false });
+      const { expense_type, project_name, status, date_start, date_end } = searchFilters;
+      if (expense_type) query = query.eq('expense_type', expense_type);
+      if (status) query = query.eq('status', status);
+      if (project_name) query = query.ilike('project_name', `%${project_name}%`);
+      if (date_start) query = query.gte('occurred_at', date_start);
+      if (date_end) query = query.lte('occurred_at', date_end);
+      const { data } = await query;
+      exportList = (data ?? []) as Expense[];
+    }
+    const rows = exportList.map(e => ({
       '费用类型':   e.expense_type,
       '所属项目':   e.project_name || '',
       '金额':       e.amount,
@@ -195,10 +226,10 @@ export default function ExpenseManager({
     });
   };
   const toggleSelectAll = () => {
-    if (selectedIds.size === paginated.length && paginated.length > 0) {
+    if (selectedIds.size === displayExpenses.length && displayExpenses.length > 0) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(paginated.map(e => e.id)));
+      setSelectedIds(new Set(displayExpenses.map(e => e.id)));
     }
   };
 
@@ -215,7 +246,7 @@ export default function ExpenseManager({
         <div>
           <h2 className="text-lg font-black text-slate-800">贸易费用</h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            共 <span className="font-bold text-slate-600">{filtered.length}</span> 条 ·
+            共 <span className="font-bold text-slate-600">{totalCount}</span> 条 ·
             折合人民币合计 <span className="font-bold text-blue-600">{fmtAmount(totalCNY)}</span>
           </p>
         </div>
@@ -287,7 +318,7 @@ export default function ExpenseManager({
                 {canEdit && (
                   <th className="px-4 py-3 text-left">
                     <input type="checkbox"
-                      checked={selectedIds.size === paginated.length && paginated.length > 0}
+                      checked={selectedIds.size === displayExpenses.length && displayExpenses.length > 0}
                       onChange={toggleSelectAll} className="rounded" />
                   </th>
                 )}
@@ -299,12 +330,12 @@ export default function ExpenseManager({
             <tbody>
               {loading ? (
                 <tr><td colSpan={canEdit ? 11 : 10} className="text-center py-12 text-slate-400 font-bold">加载中...</td></tr>
-              ) : paginated.length === 0 ? (
+              ) : displayExpenses.length === 0 ? (
                 <tr><td colSpan={canEdit ? 11 : 10} className="text-center py-16 text-slate-300">
                   <div className="text-4xl mb-2">💸</div>
                   <div className="font-bold">暂无费用记录</div>
                 </td></tr>
-              ) : paginated.map((e, i) => (
+              ) : displayExpenses.map((e, i) => (
                 <tr key={e.id}
                   className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${i % 2 === 0 ? '' : 'bg-slate-50/30'}`}>
                   {canEdit && (
@@ -349,11 +380,11 @@ export default function ExpenseManager({
         <div className="flex items-center justify-between px-6 py-3 border-t border-slate-100 bg-slate-50/50">
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span>每页</span>
-            <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+            <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
               className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white outline-none">
               {[20, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
-            <span>条 · 共 {filtered.length} 条</span>
+            <span>条 · 共 {totalCount} 条</span>
           </div>
           <div className="flex gap-1">
             <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}

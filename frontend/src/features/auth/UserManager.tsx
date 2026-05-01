@@ -6,7 +6,7 @@ const ALL_MODULES = [
     { id: 'org', name: '组织架构' },
     { id: 'dept', name: '部门管理' },
     { id: 'client', name: '客户档案' },
-    { id: 'invoices', name: '业务贸易数据中心' },
+    { id: 'invoices', name: '业务贸易数据' },
 ];
 
 export default function UserManager({ currentUser }: { currentUser: any }) {

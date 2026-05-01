@@ -6,6 +6,8 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
     const canEdit = permissionLevel === 'edit' || permissionLevel === 'head' || permissionLevel === 'admin';
     const [clients, setClients] = useState<any[]>([]);
     const [allDepartments, setAllDepartments] = useState<any[]>([]);
+    const [totalCount, setTotalCount] = useState(0);       // 【新增】服务端返回的总数
+    // const [loading, setLoading] = useState(false);         // 【预留】加载状态（UI 待对接）
     const [searchFilters, setSearchFilters] = useState({ 
         full_name: '', 
         tax_id: '', 
@@ -22,8 +24,9 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
     const [isImporting, setIsImporting] = useState(false);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     
-    // Reset pagination when search queries change
-    useEffect(() => { setCurrentPage(1); }, [searchFilters, clients, pageSize]);
+    // Reset pagination when search queries change, and auto-refetch
+    useEffect(() => { setCurrentPage(1); fetchClients(); }, [searchFilters]);
+    useEffect(() => { fetchClients(); }, [currentPage, pageSize]);
 
     const initialForm = {
         department_name: '', full_name: '', short_name: '', tax_id: '',
@@ -36,78 +39,65 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
 
     const [formData, setFormData] = useState(initialForm);
 
+    // 【优化】使用服务端分页，替代原来的 while-loop 全量拉取
+    // 之前: while 循环每次取 1000 条直到取完全表
+    // 现在: 只取当前页数据 + 总数（1次请求）
     const fetchClients = async () => {
-        let allData: any[] = [];
-        let start = 0;
-        const limit = 1000;
-        let hasMore = true;
-        let errorOccurred = false;
+        // setLoading(true);  // UI 对接后启用
 
-        while (hasMore) {
-            let query = supabase
-                .from('global_clients')
-                .select(`
-                    *,
-                    departments:department_id (
-                        name
-                    )
-                `)
-                .order('added_date', { ascending: false, nullsFirst: false })
-                .range(start, start + limit - 1);
-            
-            if (permissionLevel === 'head' || permissionLevel === 'edit') {
-                if (currentUser?.department_id) {
-                    query = query.eq('department_id', currentUser.department_id);
-                } else if (currentUser?.id) {
-                    query = query.eq('created_by', currentUser.id);
-                }
-            }
+        const from = (currentPage - 1) * pageSize;
+        const to = from + pageSize - 1;
 
-            const { data, error } = await query;
-            
-            if (error) {
-                console.error('Fetch clients error:', error);
-                errorOccurred = true;
-                break;
-            }
-            if (data && data.length > 0) {
-                allData = [...allData, ...data];
-                start += limit;
-                if (data.length < limit) hasMore = false;
-            } else {
-                hasMore = false;
+        let query = supabase
+            .from('global_clients')
+            .select(`
+                *,
+                departments:department_id (name)
+            `, { count: 'exact' })
+            .order('added_date', { ascending: false, nullsFirst: false })
+            .range(from, to);
+
+        // 权限过滤
+        if (permissionLevel === 'head' || permissionLevel === 'edit') {
+            if (currentUser?.department_id) {
+                query = query.eq('department_id', currentUser.department_id);
+            } else if (currentUser?.id) {
+                query = query.eq('created_by', currentUser.id);
             }
         }
-        
-        if (errorOccurred && allData.length === 0) {
-            // Fallback to simple select if join fails (returns first 1000)
-            let fallbackQuery = supabase
-                .from('global_clients')
-                .select('*')
-                .order('added_date', { ascending: false, nullsFirst: false })
-                .limit(1000);
-                
-            if (permissionLevel === 'head' || permissionLevel === 'edit') {
-                if (currentUser?.department_id) fallbackQuery = fallbackQuery.eq('department_id', currentUser.department_id);
-                else if (currentUser?.id) fallbackQuery = fallbackQuery.eq('created_by', currentUser.id);
-            }
-            const { data: simpleData } = await fallbackQuery;
-            if (simpleData) setClients(simpleData);
-        } else if (!errorOccurred || allData.length > 0) {
-            setClients(allData.map(c => {
-                // Determine if departments is an object or array (Supabase quirk)
-                const deptName = Array.isArray(c.departments) 
-                    ? c.departments[0]?.name 
-                    : c.departments?.name;
-                return {
-                    ...c,
-                    department_name: deptName || ''
-                };
-            }));
+
+        // 搜索条件转为服务端过滤
+        const { full_name, tax_id, risk_level, startDate, endDate } = searchFilters;
+        if (full_name) {
+            query = query.or(`full_name.ilike.%${full_name}%,short_name.ilike.%${full_name}%`);
+        }
+        if (tax_id) query = query.ilike('tax_id', `%${tax_id}%`);
+        if (risk_level) query = query.eq('risk_level', risk_level);
+        if (startDate) query = query.gte('added_date', startDate);
+        if (endDate) query = query.lte('added_date', endDate);
+
+        const { data, count, error } = await query;
+
+        if (error) {
+            console.error('Fetch clients error:', error);
+            setClients([]);
+            setTotalCount(0);
+        } else {
+            const mappedClients = (data ?? []).map(c => {
+                const deptName = Array.isArray(c.departments) ? c.departments[0]?.name : c.departments?.name;
+                return { ...c, department_name: deptName || '' };
+            });
+            setClients(mappedClients);
+            setTotalCount(count ?? 0);
         }
 
-        const { data: deptData } = await supabase.from('departments').select('id, name');
-        if (deptData) setAllDepartments(deptData);
+        // 字典数据（仅在空时加载一次）
+        if (allDepartments.length === 0) {
+            const { data: deptData } = await supabase.from('departments').select('id, name');
+            if (deptData) setAllDepartments(deptData);
+        }
+
+        // setLoading(false);  // UI 对接后启用
     };
 
     useEffect(() => {
@@ -241,30 +231,21 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
         } catch (error: any) { alert(error.message); } finally { setIsImporting(false); if (e.target) e.target.value = ''; }
     };
 
-    const filteredClients = useMemo(() => {
-        return clients.filter(c => {
-            if (searchFilters.full_name && !c.full_name?.toLowerCase().includes(searchFilters.full_name.toLowerCase()) && !c.short_name?.toLowerCase().includes(searchFilters.full_name.toLowerCase())) return false;
-            if (searchFilters.tax_id && !c.tax_id?.toLowerCase().includes(searchFilters.tax_id.toLowerCase())) return false;
-            if (searchFilters.risk_level && c.risk_level !== searchFilters.risk_level) return false;
-            if (searchFilters.department_name && c.department_name !== searchFilters.department_name) return false;
-            
-            if (searchFilters.startDate && c.added_date && c.added_date < searchFilters.startDate) return false;
-            if (searchFilters.endDate && c.added_date && c.added_date > searchFilters.endDate) return false;
-            
-            return true;
-        });
-    }, [clients, searchFilters]);
-    
-    const paginatedClients = filteredClients.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-    const totalPages = Math.ceil(filteredClients.length / pageSize);
+    // 【优化】服务端已处理搜索过滤+分页，此处仅保留 department_name 客户端兜底
+    const displayClients = useMemo(() => {
+        if (!searchFilters.department_name) return clients;
+        return clients.filter(c => c.department_name === searchFilters.department_name);
+    }, [clients, searchFilters.department_name]);
+
+    // 服务端已分页，无需再 slice
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
 
     const toggleSelectAll = (checked: boolean) => {
-        const newSet = new Set(selectedIds);
-        paginatedClients.forEach(c => {
-            if (checked) newSet.add(c.id);
-            else newSet.delete(c.id);
-        });
-        setSelectedIds(newSet);
+        if (checked) {
+            setSelectedIds(new Set(displayClients.map(c => c.id)));
+        } else {
+            setSelectedIds(new Set());
+        }
     };
 
     const toggleSelectOne = (id: string) => {
@@ -274,11 +255,21 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
         setSelectedIds(newSet);
     };
 
-    const isAllSelected = paginatedClients.length > 0 && paginatedClients.every(c => selectedIds.has(c.id));
+    const isAllSelected = displayClients.length > 0 && displayClients.every(c => selectedIds.has(c.id));
 
-    // 导出客户档案数据（支持导出当前页或全部）
-    const handleExport = (scope: 'page' | 'all') => {
-        const dataToExport = scope === 'page' ? paginatedClients : clients;
+    // 导出客户档案数据（服务端分页模式下，"全部"需单独查询，此处当前页=displayClients）
+    const handleExport = async (scope: 'page' | 'all') => {
+        let dataToExport: any[];
+        if (scope === 'page') {
+            dataToExport = displayClients;
+        } else {
+            // 导出全部：临时执行一次无分页查询（仅取数据，不限数量）
+            const { data } = await supabase.from('global_clients').select('*, departments:department_id (name)');
+            dataToExport = (data ?? []).map(c => ({
+                ...c,
+                department_name: Array.isArray(c.departments) ? c.departments[0]?.name : c.departments?.name
+            }));
+        }
         const exportData = dataToExport.map(c => ({
             '企业法定全称': c.full_name,
             '客户简称': c.short_name,
@@ -449,11 +440,11 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
                                 <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
                                     <button onClick={() => handleExport('page')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2">
                                         <span className="text-blue-500">📄</span> 导出当前页
-                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({paginatedClients.length})</span>
+                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({displayClients.length})</span>
                                     </button>
                                     <button onClick={() => handleExport('all')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2 border-t border-slate-50">
                                         <span className="text-emerald-500">📋</span> 导出全部
-                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({clients.length})</span>
+                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({totalCount})</span>
                                     </button>
                                 </div>
                             </div>
@@ -474,7 +465,7 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
                         </div>
 
                         <div className="space-y-4">
-                            {paginatedClients.map(client => {
+                            {displayClients.map(client => {
                                 const isSelected = selectedIds.has(client.id);
                                 return (
                                     <div key={client.id} className={`group relative p-6 rounded-[2rem] border transition-all duration-300 ${isSelected ? 'bg-indigo-50/50 border-indigo-200 shadow-md' : 'bg-white border-slate-100 hover:border-indigo-100 hover:shadow-xl'}`}>
@@ -506,20 +497,20 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
                                     </div>
                                 );
                             })}
-                            {paginatedClients.length === 0 && <div className="text-center py-24 text-slate-300 font-black uppercase tracking-[0.3em]">No records found</div>}
+                            {displayClients.length === 0 && <div className="text-center py-24 text-slate-300 font-black uppercase tracking-[0.3em]">No records found</div>}
                         </div>
 
-                        {filteredClients.length > 0 && (
+                        {totalCount > 0 && (
                             <div className="flex flex-col md:flex-row justify-between items-center mt-10 pt-8 border-t border-slate-50 gap-6">
                                 <div className="flex items-center gap-4">
                                     <span className="text-xs text-slate-400 font-black uppercase tracking-widest">Rows</span>
-                                    <select className="border-none rounded-xl px-4 py-2 text-xs font-black text-slate-700 bg-slate-50 shadow-inner" value={pageSize} onChange={e => setPageSize(Number(e.target.value))}>
+                                    <select className="border-none rounded-xl px-4 py-2 text-xs font-black text-slate-700 bg-slate-50 shadow-inner" value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}>
                                         <option value={10}>10</option>
                                         <option value={50}>50</option>
                                         <option value={100}>100</option>
                                         <option value={500}>500</option>
                                     </select>
-                                    <span className="text-[10px] text-slate-300 font-black uppercase tracking-widest">Global pool total: {filteredClients.length} records</span>
+                                    <span className="text-[10px] text-slate-300 font-black uppercase tracking-widest">Global pool total: {totalCount} records</span>
                                 </div>
                                 <div className="flex gap-3 items-center">
                                     <button disabled={currentPage === 1} onClick={() => setCurrentPage(c => c - 1)} className="p-3 rounded-2xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm disabled:opacity-20 text-xs">PREV</button>
@@ -546,7 +537,7 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
                         </tr>
                     </thead>
                     <tbody className="text-[11px] text-center">
-                        {filteredClients.map(c => (
+                        {displayClients.map(c => (
                             <tr key={c.id} className="border-b border-slate-300">
                                 <td className="p-4 font-black text-slate-400">@{c.department_name}</td>
                                 <td className="p-4 text-left font-black text-[13px]">{c.full_name}</td>

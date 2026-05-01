@@ -191,12 +191,14 @@ export default function TaxInvoiceManager({ permissionLevel = 'edit', currentUse
     const canEdit = permissionLevel === 'edit' || permissionLevel === 'head' || permissionLevel === 'admin';
     const [invoices, setInvoices] = useState<any[]>([]);
     const [allDepartments, setAllDepartments] = useState<any[]>([]);
-    
+    const [totalCount, setTotalCount] = useState(0);       // 【新增】服务端返回的总数
+    // const [loading, setLoading] = useState(false);         // 【预留】加载状态（UI 待对接）
+
     // Search Filters
-    const [searchFilters, setSearchFilters] = useState({ 
-        seller_name: '', 
-        buyer_name: '', 
-        invoice_code: '', 
+    const [searchFilters, setSearchFilters] = useState({
+        seller_name: '',
+        buyer_name: '',
+        invoice_code: '',
         digital_invoice_number: '',
         startDate: '',
         endDate: '',
@@ -210,9 +212,10 @@ export default function TaxInvoiceManager({ permissionLevel = 'edit', currentUse
     const [linkingInvoice, setLinkingInvoice] = useState<any | null>(null);
     const [links, setLinks] = useState<Record<string, any[]>>({});
     const [clients, setClients] = useState<any[]>([]);
-    
+
     // Reset pagination when search queries change
-    useEffect(() => { setCurrentPage(1); }, [searchFilters, invoices, pageSize]);
+    useEffect(() => { setCurrentPage(1); fetchInvoices(); }, [searchFilters]); // 【优化】筛选变化时自动重新查询
+    useEffect(() => { fetchInvoices(); }, [currentPage, pageSize]);     // 【优化】翻页时重新查询
 
     useEffect(() => {
         const fetchClients = async () => {
@@ -240,58 +243,64 @@ export default function TaxInvoiceManager({ permissionLevel = 'edit', currentUse
         }
     };
 
+    // 【优化】使用服务端分页，替代原来的 while-loop 全量拉取
+    // 之前: while 循环每次取 1000 条直到取完全表（1万条 = 10次串行请求）
+    // 现在: 只取当前页数据 + 总数（1次请求）
     const fetchInvoices = async () => {
-        let allData: any[] = [];
-        let start = 0;
-        const limit = 1000;
-        let hasMore = true;
+        // setLoading(true);  // UI 对接后启用
 
-        while (hasMore) {
-            let query = supabase
-                .from('tax_invoices')
-                .select(`
-                    *,
-                    departments:department_id (name)
-                `)
-                .order('issue_date', { ascending: false, nullsFirst: false })
-                .range(start, start + limit - 1);
-            
-            if (permissionLevel === 'head' || permissionLevel === 'edit') {
-                if (currentUser?.department_id) {
-                    query = query.eq('department_id', currentUser.department_id);
-                } else if (currentUser?.id) {
-                    query = query.eq('created_by', currentUser.id);
-                }
-            }
+        // 1. 分页查询主数据
+        const from = (currentPage - 1) * pageSize;
+        const to = from + pageSize - 1;
 
-            const { data, error } = await query;
-            
-            if (error) {
-                console.error('Fetch tax_invoices error:', error);
-                break;
-            }
-            if (data && data.length > 0) {
-                allData = [...allData, ...data];
-                start += limit;
-                if (data.length < limit) hasMore = false;
-            } else {
-                hasMore = false;
+        let query = supabase
+            .from('tax_invoices')
+            .select(`
+                *,
+                departments:department_id (name)
+            `, { count: 'exact' })
+            .order('issue_date', { ascending: false, nullsFirst: false })
+            .range(from, to);
+
+        // 权限过滤
+        if (permissionLevel === 'head' || permissionLevel === 'edit') {
+            if (currentUser?.department_id) {
+                query = query.eq('department_id', currentUser.department_id);
+            } else if (currentUser?.id) {
+                query = query.eq('created_by', currentUser.id);
             }
         }
-        
-        if (allData.length > 0) {
-            const mappedInvoices = allData.map(inv => {
+
+        // 客户端搜索条件转为服务端过滤（减少传输数据量）
+        const { seller_name, buyer_name, invoice_code, digital_invoice_number, startDate, endDate } = searchFilters;
+        if (seller_name) query = query.ilike('seller_name', `%${seller_name}%`);
+        if (buyer_name) query = query.ilike('buyer_name', `%${buyer_name}%`);
+        if (invoice_code) query = query.ilike('invoice_code', `%${invoice_code}%`);
+        if (digital_invoice_number) query = query.ilike('digital_invoice_number', `%${digital_invoice_number}%`);
+        if (startDate) query = query.gte('issue_date', startDate);
+        if (endDate) query = query.lte('issue_date', endDate);
+
+        const { data, count, error } = await query;
+
+        if (error) {
+            console.error('Fetch tax_invoices error:', error);
+            setInvoices([]);
+            setTotalCount(0);
+        } else {
+            const mappedInvoices = (data ?? []).map(inv => {
                 const deptName = Array.isArray(inv.departments) ? inv.departments[0]?.name : inv.departments?.name;
                 return { ...inv, department_name: deptName || '' };
             });
             setInvoices(mappedInvoices);
+            setTotalCount(count ?? 0);
             fetchLinks(mappedInvoices.map(i => i.id));
-        } else {
-            setInvoices([]);
         }
 
+        // 字典数据
         const { data: deptData } = await supabase.from('departments').select('id, name');
         if (deptData) setAllDepartments(deptData);
+
+        // setLoading(false);  // UI 对接后启用
     };
 
     useEffect(() => {
@@ -520,29 +529,19 @@ export default function TaxInvoiceManager({ permissionLevel = 'edit', currentUse
         }
     };
 
-    const filteredInvoices = useMemo(() => {
-        return invoices.filter(c => {
-            if (searchFilters.seller_name && !c.seller_name?.toLowerCase().includes(searchFilters.seller_name.toLowerCase())) return false;
-            if (searchFilters.buyer_name && !c.buyer_name?.toLowerCase().includes(searchFilters.buyer_name.toLowerCase())) return false;
-            if (searchFilters.invoice_code && !c.invoice_code?.toLowerCase().includes(searchFilters.invoice_code.toLowerCase())) return false;
-            if (searchFilters.digital_invoice_number && !c.digital_invoice_number?.toLowerCase().includes(searchFilters.digital_invoice_number.toLowerCase())) return false;
-            if (searchFilters.department_name && c.department_name !== searchFilters.department_name) return false;
-            if (searchFilters.startDate && c.issue_date && c.issue_date < searchFilters.startDate) return false;
-            if (searchFilters.endDate && c.issue_date && c.issue_date > searchFilters.endDate) return false;
-            return true;
-        });
-    }, [invoices, searchFilters]);
+    // 【优化】服务端已处理搜索过滤+分页，此处仅保留 department_name 客户端兜底
+    // （因为下拉选的是 name 而非 id，需要二次筛选）
+    const displayInvoices = useMemo(() => {
+        if (!searchFilters.department_name) return invoices;
+        return invoices.filter(c => c.department_name === searchFilters.department_name);
+    }, [invoices, searchFilters.department_name]);
 
-    const paginatedInvoices = useMemo(() => {
-        const start = (currentPage - 1) * pageSize;
-        return filteredInvoices.slice(start, start + pageSize);
-    }, [filteredInvoices, currentPage, pageSize]);
-
-    const totalPages = Math.ceil(filteredInvoices.length / pageSize) || 1;
+    // 服务端已分页，无需再 slice
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
 
     const toggleSelectAll = (checked: boolean) => {
         if (checked) {
-            setSelectedIds(new Set(paginatedInvoices.map(i => i.id)));
+            setSelectedIds(new Set(displayInvoices.map(i => i.id)));
         } else {
             setSelectedIds(new Set());
         }
@@ -555,11 +554,11 @@ export default function TaxInvoiceManager({ permissionLevel = 'edit', currentUse
         setSelectedIds(newSet);
     };
 
-    const isAllSelected = paginatedInvoices.length > 0 && selectedIds.size === paginatedInvoices.length;
+    const isAllSelected = displayInvoices.length > 0 && selectedIds.size === displayInvoices.length;
 
-    // Aggregated Metrics
-    const totalAmount = useMemo(() => filteredInvoices.reduce((sum, i) => sum + (Number(i.amount) || 0), 0), [filteredInvoices]);
-    const totalTax = useMemo(() => filteredInvoices.reduce((sum, i) => sum + (Number(i.tax_amount) || 0), 0), [filteredInvoices]);
+    // Aggregated Metrics — 基于当前页展示数据
+    const totalAmount = useMemo(() => displayInvoices.reduce((sum, i) => sum + (Number(i.amount) || 0), 0), [displayInvoices]);
+    const totalTax = useMemo(() => displayInvoices.reduce((sum, i) => sum + (Number(i.tax_amount) || 0), 0), [displayInvoices]);
 
     return (
         <div className="max-w-[1600px] mx-auto px-4 py-8">
@@ -640,7 +639,7 @@ export default function TaxInvoiceManager({ permissionLevel = 'edit', currentUse
                     <div className="grid grid-cols-3 gap-4">
                         <div className="bg-indigo-600 p-6 rounded-[2rem] text-white shadow-lg shadow-indigo-200">
                             <p className="text-[10px] font-black text-indigo-200 uppercase tracking-widest mb-1">检索结果发票数</p>
-                            <p className="text-3xl font-black flex items-baseline gap-2">{filteredInvoices.length} <span className="text-sm font-normal text-indigo-200">张</span></p>
+                            <p className="text-3xl font-black flex items-baseline gap-2">{totalCount} <span className="text-sm font-normal text-indigo-200">张</span></p>
                         </div>
                         <div className="bg-white border p-6 rounded-[2rem] shadow-sm">
                             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">发票总金额</p>
@@ -670,7 +669,7 @@ export default function TaxInvoiceManager({ permissionLevel = 'edit', currentUse
                         
                         <div className="overflow-x-auto no-scrollbar">
                             <div className="min-w-[1000px] space-y-3 pb-6">
-                                {paginatedInvoices.map(inv => {
+                                {displayInvoices.map(inv => {
                                     const isSelected = selectedIds.has(inv.id);
                                     return (
                                         <div key={inv.id} className={`flex items-center gap-4 p-4 rounded-[1.5rem] border transition-all ${isSelected ? 'bg-indigo-50/50 border-indigo-200' : 'bg-slate-50/50 border-transparent hover:bg-white hover:border-slate-100 hover:shadow-md'}`}>
@@ -731,17 +730,17 @@ export default function TaxInvoiceManager({ permissionLevel = 'edit', currentUse
                                         </div>
                                     );
                                 })}
-                                {paginatedInvoices.length === 0 && (
+                                {displayInvoices.length === 0 && (
                                     <div className="text-center py-20 text-slate-400 font-bold">没有找到匹配的发票记录。</div>
                                 )}
                             </div>
                         </div>
 
-                        {filteredInvoices.length > 0 && (
+                        {totalCount > 0 && (
                             <div className="flex justify-between items-center mt-6 pt-6 border-t border-slate-100 px-2">
                                 <div className="flex items-center gap-4">
                                     <span className="text-xs font-bold text-slate-400">
-                                        Displaying {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, filteredInvoices.length)} of {filteredInvoices.length} records
+                                        Displaying {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, totalCount)} of {totalCount} records
                                     </span>
                                     <select 
                                         className="text-xs border-none bg-slate-50 text-slate-600 font-black rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-indigo-100 hover:bg-slate-100 cursor-pointer transition-colors"

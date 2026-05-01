@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../../api/supabase';
 import type { Contract, ContractStatus, ContractType } from '../../types';
 import * as XLSX from 'xlsx';
@@ -37,6 +37,7 @@ export default function ContractManager({
 }) {
   const canEdit = permissionLevel === 'edit';
   const [contracts, setContracts] = useState<Contract[]>([]);
+  const [totalCount, setTotalCount] = useState(0);       // 【新增】服务端返回的总数
   const [loading, setLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -57,41 +58,50 @@ export default function ContractManager({
   const [pageSize, setPageSize] = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Reset page on filter/data change
-  useEffect(() => { setCurrentPage(1); }, [searchFilters, contracts, pageSize]);
+  // Reset page on filter change + auto-refetch
+  useEffect(() => { setCurrentPage(1); fetchContracts(); }, [searchFilters]);
+  useEffect(() => { fetchContracts(); }, [currentPage, pageSize]);
 
+  // 【优化】使用服务端分页 + 服务端过滤，替代原来 select('*') 全量拉取
   const fetchContracts = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    const from = (currentPage - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabase
       .from('contracts')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (!error && data) setContracts(data as Contract[]);
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    // 搜索条件转为服务端过滤
+    const { contract_name, party_a_name, party_b_name, status, contract_type, date_start, date_end } = searchFilters;
+    if (contract_name) query = query.ilike('contract_name', `%${contract_name}%`);
+    if (party_a_name) query = query.ilike('party_a_name', `%${party_a_name}%`);
+    if (party_b_name) query = query.ilike('party_b_name', `%${party_b_name}%`);
+    if (status) query = query.eq('status', status);
+    if (contract_type) query = query.eq('contract_type', contract_type);
+    if (date_start) query = query.gte('signed_at', date_start);
+    if (date_end) query = query.lte('signed_at', date_end);
+
+    const { data, count, error } = await query;
+    if (error) {
+      console.error('Fetch contracts error:', error);
+      setContracts([]);
+      setTotalCount(0);
+    } else {
+      setContracts((data ?? []) as Contract[]);
+      setTotalCount(count ?? 0);
+    }
     setLoading(false);
   };
 
-  useEffect(() => { fetchContracts(); }, []);
+  useEffect(() => { fetchContracts(); }, []); // 初始加载
 
-  const filtered = useMemo(() => {
-    return contracts.filter(c => {
-      const name   = searchFilters.contract_name.toLowerCase();
-      const partyA = searchFilters.party_a_name.toLowerCase();
-      const partyB = searchFilters.party_b_name.toLowerCase();
-      if (name   && !c.contract_name?.toLowerCase().includes(name))   return false;
-      if (partyA && !c.party_a_name?.toLowerCase().includes(partyA)) return false;
-      if (partyB && !c.party_b_name?.toLowerCase().includes(partyB)) return false;
-      if (searchFilters.status && c.status !== searchFilters.status) return false;
-      if (searchFilters.contract_type && c.contract_type !== searchFilters.contract_type) return false;
-      if (searchFilters.date_start && c.signed_at && c.signed_at < searchFilters.date_start) return false;
-      if (searchFilters.date_end   && c.signed_at && c.signed_at > searchFilters.date_end)   return false;
-      return true;
-    });
-  }, [contracts, searchFilters]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const paginated  = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-
-  const totalAmount = filtered.reduce((sum, c) => sum + (c.amount || 0), 0);
+  // 【优化】服务端已处理全部过滤+分页，直接透传
+  const displayContracts = contracts;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const totalAmount = displayContracts.reduce((sum, c) => sum + (c.amount || 0), 0);
 
   const openNew = () => {
     setEditingId(null);
@@ -159,8 +169,27 @@ export default function ContractManager({
     fetchContracts();
   };
 
-  const handleExport = () => {
-    const rows = filtered.map(c => ({
+  const handleExport = async () => {
+    // 导出当前筛选条件下的全部数据（临时无分页查询）
+    let exportList: Contract[];
+    if (totalCount <= pageSize) {
+      // 当前页已是全部数据
+      exportList = displayContracts;
+    } else {
+      // 需要单独拉取全量
+      let query = supabase.from('contracts').select('*').order('created_at', { ascending: false });
+      const { contract_name, party_a_name, party_b_name, status, contract_type, date_start, date_end } = searchFilters;
+      if (contract_name) query = query.ilike('contract_name', `%${contract_name}%`);
+      if (party_a_name) query = query.ilike('party_a_name', `%${party_a_name}%`);
+      if (party_b_name) query = query.ilike('party_b_name', `%${party_b_name}%`);
+      if (status) query = query.eq('status', status);
+      if (contract_type) query = query.eq('contract_type', contract_type);
+      if (date_start) query = query.gte('signed_at', date_start);
+      if (date_end) query = query.lte('signed_at', date_end);
+      const { data } = await query;
+      exportList = (data ?? []) as Contract[];
+    }
+    const rows = exportList.map(c => ({
       '合同编号': c.contract_no,
       '合同名称': c.contract_name,
       '合同类型': c.contract_type || '',
@@ -187,10 +216,10 @@ export default function ContractManager({
     });
   };
   const toggleSelectAll = () => {
-    if (selectedIds.size === paginated.length && paginated.length > 0) {
+    if (selectedIds.size === displayContracts.length && displayContracts.length > 0) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(paginated.map(c => c.id)));
+      setSelectedIds(new Set(displayContracts.map(c => c.id)));
     }
   };
 
@@ -204,7 +233,7 @@ export default function ContractManager({
         <div>
           <h2 className="text-lg font-black text-slate-800">合同管理</h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            共 <span className="font-bold text-slate-600">{filtered.length}</span> 份合同 ·
+            共 <span className="font-bold text-slate-600">{totalCount}</span> 份合同 ·
             总金额 <span className="font-bold text-blue-600">{fmtAmount(totalAmount)}</span>
           </p>
         </div>
@@ -275,7 +304,7 @@ export default function ContractManager({
                 {canEdit && (
                   <th className="px-4 py-3 text-left">
                     <input type="checkbox"
-                      checked={selectedIds.size === paginated.length && paginated.length > 0}
+                      checked={selectedIds.size === displayContracts.length && displayContracts.length > 0}
                       onChange={toggleSelectAll}
                       className="rounded" />
                   </th>
@@ -288,12 +317,12 @@ export default function ContractManager({
             <tbody>
               {loading ? (
                 <tr><td colSpan={canEdit ? 11 : 10} className="text-center py-12 text-slate-400 font-bold">加载中...</td></tr>
-              ) : paginated.length === 0 ? (
+              ) : displayContracts.length === 0 ? (
                 <tr><td colSpan={canEdit ? 11 : 10} className="text-center py-16 text-slate-300">
                   <div className="text-4xl mb-2">📄</div>
                   <div className="font-bold">暂无合同数据</div>
                 </td></tr>
-              ) : paginated.map((c, i) => (
+              ) : displayContracts.map((c, i) => (
                 <tr key={c.id}
                   className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${i % 2 === 0 ? '' : 'bg-slate-50/30'}`}>
                   {canEdit && (
@@ -338,11 +367,11 @@ export default function ContractManager({
         <div className="flex items-center justify-between px-6 py-3 border-t border-slate-100 bg-slate-50/50">
           <div className="flex items-center gap-2 text-xs text-slate-500">
             <span>每页</span>
-            <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+            <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
               className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white outline-none">
               {[20, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
-            <span>条 · 共 {filtered.length} 条</span>
+            <span>条 · 共 {totalCount} 条</span>
           </div>
           <div className="flex gap-1">
             <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}
