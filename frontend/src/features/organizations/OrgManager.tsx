@@ -212,6 +212,37 @@ export default function OrgManager({ permissionLevel = 'edit' }: { permissionLev
 
     const isAllSelected = paginatedOrgs.length > 0 && paginatedOrgs.every(o => selectedIds.has(o.id));
 
+    // 导出档案数据（支持导出当前页或全部）
+    const handleExport = (scope: 'page' | 'all') => {
+        const dataToExport = scope === 'page' ? paginatedOrgs : orgs;
+        const exportData = dataToExport.map(org => ({
+            '实体全称': org.name,
+            '机构简称': org.short_name,
+            '信用代码': org.tax_id,
+            '财务负责人': org.finance_leader,
+            '成立时间': org.founded_at,
+            '法人代表': org.legal_person,
+            '法人电话': org.legal_phone,
+            '股东及持股比例': org.shareholders,
+            '注册资本': org.reg_capital,
+            '详细注册地址': org.reg_address,
+            '省份': org.province,
+            '城市': org.city,
+            '开户银行': org.bank_name,
+            '银行账号': org.bank_account,
+            '发票额度': org.invoice_quota,
+            '信用评级': org.credit_rating,
+            '纳税人类型': org.taxpayer_type,
+            '架构路径': org.path,
+            '企业类型': org.org_type
+        }));
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '集团档案');
+        const label = scope === 'page' ? '当前页' : '全量';
+        XLSX.writeFile(wb, `海露集团档案_${label}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    };
+
     return (
         <div className="p-6 max-w-[1600px] mx-auto min-h-screen">
             
@@ -351,6 +382,23 @@ export default function OrgManager({ permissionLevel = 'edit' }: { permissionLev
                                 <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
                             </label>
                             )}
+                            {/* 导出按钮（默认当前页，可选全部） */}
+                            <div className="relative group">
+                                <button className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl text-sm font-black transition-all shadow-lg shadow-blue-100 flex items-center gap-1.5">
+                                    📤 导出
+                                    <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+                                </button>
+                                <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                                    <button onClick={() => handleExport('page')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2">
+                                        <span className="text-blue-500">📄</span> 导出当前页
+                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({paginatedOrgs.length})</span>
+                                    </button>
+                                    <button onClick={() => handleExport('all')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2 border-t border-slate-50">
+                                        <span className="text-emerald-500">📋</span> 导出全部
+                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({orgs.length})</span>
+                                    </button>
+                                </div>
+                            </div>
                             <button onClick={() => window.print()} className="bg-slate-100 p-3 rounded-2xl hover:bg-slate-200 transition-colors shadow-sm" title="打印档案">🖨️</button>
                         </div>
                     </div>
@@ -379,9 +427,9 @@ export default function OrgManager({ permissionLevel = 'edit' }: { permissionLev
                                                 <div className="flex-1">
                                                     <div className="flex items-center gap-3">
                                                         <span className={`text-lg font-black tracking-tight ${depth === 0 ? 'text-indigo-600' : 'text-slate-800'}`}>{org.name}</span>
-                                                        <span className="text-[10px] bg-slate-900/10 text-slate-900 px-2 py-0.5 rounded-lg font-mono font-black">{org.short_name}</span>
+                                                        <span className="text-[12px] bg-blue-100 text-blue-700 px-2.5 py-1 rounded-xl font-mono font-black">{org.short_name}</span>
                                                     </div>
-                                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-y-2 gap-x-8 mt-4 text-[12px]">
+                                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-y-2 gap-x-8 mt-4 text-[13.5px]">
                                                         <p className="flex flex-col gap-0.5"><span className="text-[9px] font-black text-slate-300 uppercase">Credit ID</span><span className="text-slate-600 font-mono font-bold">{org.tax_id}</span></p>
                                                         <p className="flex flex-col gap-0.5"><span className="text-[9px] font-black text-slate-300 uppercase font-bold text-indigo-400">Legal Rep</span><span className="text-slate-800 font-black">{org.legal_person || '未维护'}</span></p>
                                                         <p className="flex flex-col gap-0.5"><span className="text-[9px] font-black text-slate-300 uppercase">Reg Date</span><span className="text-emerald-600 font-bold">{org.founded_at || '未披露'}</span></p>

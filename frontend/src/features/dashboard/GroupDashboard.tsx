@@ -1,274 +1,323 @@
-import React, { useState, useEffect } from 'react';
-import { supabase } from '../../api/supabase';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
-
-// Use require or import for JSON. 
 import chinaGeoJson from '../../data/china.json';
-import marketsDataObj from '../../data/markets.json'; 
-import cityCoordsObj from '../../data/city_coordinates.json';
 import marketCoordsObj from '../../data/market_coordinates.json';
+import marketAbbrObj from '../../data/market_abbreviations.json';
 
-const marketsData: Record<string, {province: string, city: string}> = marketsDataObj;
-const cityCoords: Record<string, [number, number]> = cityCoordsObj;
-const marketCoords: Record<string, {province: string, city: string, coordinates: [number, number]}> = marketCoordsObj;
+import {
+  fetchDashboardRecords,
+  getRevenue,
+} from '../../services/dashboardService';
+
+import type {
+  DashboardRecord,
+  DashboardStats,
+  MapDataItem,
+  TopProductItem,
+  TopCompanyItem,
+} from '../../services/dashboardService';
+
+// ========== 常量 ==========
+const marketCoords = marketCoordsObj as unknown as Record<string, {province: string, city: string, coordinates: [number, number]}>;
+const MARKET_ABBR: Record<string, string> = marketAbbrObj as Record<string, string>;
+const getAbbr = (market: string) => MARKET_ABBR[market] || market;
 
 const PROVINCE_COLORS: Record<string, string> = {
-    "广东": "#3b82f6", // blue
-    "四川": "#ec4899", // pink
-    "海南": "#10b981", // emerald
-    "安徽": "#f59e0b", // amber
-    "江西": "#8b5cf6", // violet
-    "江苏": "#14b8a6", // teal
-    "福建": "#f43f5e", // rose
-    "上海": "#6366f1", // indigo
-    "天津": "#06b6d4", // cyan
-    "湖北": "#eab308", // yellow
-    "陕西": "#84cc16", // lime
-    "湖南": "#d946ef", // fuchsia
-    "河南": "#0ea5e9", // sky
-    "重庆": "#f97316", // orange
-    "DEFAULT": "#4f46e5"
+    "广东": "#3b82f6", "四川": "#ec4899", "海南": "#10b981",
+    "安徽": "#f59e0b", "江西": "#8b5cf6", "江苏": "#14b8a6",
+    "福建": "#f43f5e", "上海": "#6366f1", "天津": "#06b6d4",
+    "湖北": "#eab308", "陕西": "#84cc16", "湖南": "#d946ef",
+    "河南": "#0ea5e9", "重庆": "#f97316", "DEFAULT": "#4f46e5"
 };
 
 echarts.registerMap('china', chinaGeoJson as any);
 
-export default function GroupDashboard() {
-    const [stats, setStats] = useState({
-        totalRevenue: 0,
-        invoicedAmount: 0,
-        nonInvoicedAmount: 0,
-        settlementRate: 0,
-        subsidiaryData: [] as any[],
-        mapData: [] as any[],
-        diagnostic: {
-            totalRecords: 0,
-            matchedRecords: 0
+// ========== 地理预索引（一次性构建，O(1) 查找） ==========
+interface MarketInfo { province: string; city: string; coordinates: [number, number]; }
+let _geoIndex: Map<string, MarketInfo> | null = null;
+function getGeoIndex(): Map<string, MarketInfo> {
+    if (!_geoIndex) {
+        _geoIndex = new Map();
+        for (const [key, val] of Object.entries(marketCoords)) {
+            _geoIndex.set(key.trim(), val);
+            _geoIndex.set(key.trim().replace(/[省市区县市场]$/g, ''), val);
         }
-    });
+    }
+    return _geoIndex;
+}
 
-    const fetchGlobalStats = async () => {
-        // 1. 获取所有贸易记录 (明确指定 FK 以免歧义导致 fetch 失败)
-        const { data: records, error } = await supabase.from('invoices')
-            .select('*, organizations!invoices_org_id_fkey(name)')
-            .order('created_at', { ascending: false });
+// ========== 单次遍历聚合引擎 ==========
+function computeStats(
+    records: DashboardRecord[],
+    fMarket: string | undefined,
+    fProduct: string | undefined,
+    fDateFrom: string | undefined,
+    fDateTo: string | undefined
+): DashboardStats & {
+    marketDetailMap: Map<string, MapDataItem & { products: Map<string, number>; recordCount: number }>;
+} {
+    const geoIdx = getGeoIndex();
+    const normalize = (s: string) => s.trim().replace(/[省市区县市场]$/g, '');
 
-        if (error) {
-            console.error("Dashboard Fetch Error (with join):", error);
-            // 兜底：如果关联查询失败，尝试简单的单表查询
-            const { data: fallbackRecords, error: fallbackError } = await supabase.from('invoices').select('*');
-            if (fallbackError) {
-                console.error("Dashboard Fetch Error (fallback):", fallbackError);
-                return;
+    // 所有聚合在一次遍历中完成
+    let totalRev = 0, invoicedAmt = 0, settledAmt = 0, matchedCount = 0, totalCnt = 0;
+    const productMap = new Map<string, TopProductItem & { count: number }>();
+    const companyMap = new Map<string, number>();
+    const marketMap = new Map<string, MapDataItem & { products: Map<string, number>; recordCount: number }>();
+
+    for (const r of records) {
+        if (fMarket && r.trade_location?.trim() !== fMarket) continue;
+        if (fProduct && r.product_info?.trim() !== fProduct) continue;
+        if (fDateFrom && (r.trade_date ?? '') < fDateFrom) continue;
+        if (fDateTo && (r.trade_date ?? '') > fDateTo) continue;
+
+        totalCnt++;
+        const rev = getRevenue(r);
+        totalRev += rev;
+
+        if (r.invoice_status === '已开票') invoicedAmt += rev;
+        if (r.transaction_status === '已走流水') settledAmt += rev;
+
+        // 商品
+        const pName = r.product_info?.trim() || '未分类';
+        const price = Number(r.unit_price) || 0;
+        const loc = r.trade_location?.trim() || '';
+        const date = r.trade_date || '';
+
+        let pEnt = productMap.get(pName);
+        if (!pEnt) {
+            pEnt = { name: pName, amount: 0, maxPrice: price, maxMarket: loc, maxDate: date,
+                      minPrice: price, minMarket: loc, minDate: date, count: 0 };
+            productMap.set(pName, pEnt);
+        }
+        pEnt.amount += rev; pEnt.count++;
+        if (price > pEnt.maxPrice) { pEnt.maxPrice = price; pEnt.maxMarket = loc; pEnt.maxDate = date; }
+        if (price > 0 && (pEnt.minPrice === 0 || price < pEnt.minPrice)) {
+            pEnt.minPrice = price; pEnt.minMarket = loc; pEnt.minDate = date;
+        }
+
+        // 公司
+        const cName = r.organizations?.name || '未知单元';
+        companyMap.set(cName, (companyMap.get(cName) || 0) + rev);
+
+        // 地图（O(1) 索引查找）
+        const rawLoc = r.trade_location?.trim();
+        if (rawLoc) {
+            let info = geoIdx.get(rawLoc) || geoIdx.get(normalize(rawLoc));
+            if (info) {
+                matchedCount++;
+                const mKey = info.city + '-' + info.province;
+                let mEnt = marketMap.get(mKey);
+                if (!mEnt) {
+                    mEnt = { name: rawLoc, value: 0, city: info.city, province: info.province,
+                             coords: info.coordinates, products: new Map(), recordCount: 0 };
+                    marketMap.set(mKey, mEnt);
+                }
+                mEnt.value += rev; mEnt.recordCount++;
+                mEnt.products.set(pName, (mEnt.products.get(pName) || 0) + rev);
             }
-            processRecords(fallbackRecords || []);
-        } else {
-            processRecords(records || []);
         }
+    }
+
+    // 排序取 Top
+    const topProducts: TopProductItem[] = [...productMap.values()]
+        .sort((a, b) => b.amount - a.amount).slice(0, 10)
+        .map(({ name, amount, maxPrice, maxMarket, maxDate, minPrice, minMarket, minDate }) =>
+             ({ name, amount, maxPrice, maxMarket, maxDate, minPrice, minMarket, minDate }));
+
+    const topCompanies: TopCompanyItem[] = [...companyMap.entries()]
+        .sort((a, b) => b[1] - a[1]).slice(0, 10)
+        .map(([name, amount]) => ({ name, amount }));
+
+    const mapData: MapDataItem[] = [...marketMap].map(([, v]) => ({
+        name: v.name, value: v.value, city: v.city, province: v.province, coords: v.coords,
+        products: [...v.products.entries()].sort((a, b) => b[1] - a[1])
+            .slice(0, 5).map(([n, a]) => ({ name: n, amount: a })),
+    }));
+
+    return {
+        totalRevenue: totalRev,
+        invoicedAmount: invoicedAmt,
+        nonInvoicedAmount: totalRev - invoicedAmt,
+        settlementRate: totalRev > 0 ? (settledAmt / totalRev) * 100 : 0,
+        mapData,
+        topProducts,
+        topCompanies,
+        diagnostic: { totalRecords: totalCnt, matchedRecords: matchedCount },
+        marketDetailMap: marketMap,
+    };
+}
+
+// ========== 组件 ==========
+export default function GroupDashboard() {
+    const [rawRecords, setRawRecords] = useState<DashboardRecord[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    // ── 筛选器状态 ──
+    const [filterMarket, setFilterMarket] = useState('');
+    const [filterProduct, setFilterProduct] = useState('');
+    const [filterDateFrom, setFilterDateFrom] = useState('');
+    const [filterDateTo, setFilterDateTo] = useState('');
+
+    // ── 派生选项（从原始数据提取） ──
+    const marketOptions = useMemo(() =>
+        [...new Set(rawRecords.map(r => r.trade_location?.trim()).filter(Boolean))].sort(),
+        [rawRecords]
+    );
+    const productOptions = useMemo(() =>
+        [...new Set(rawRecords.map(r => r.product_info?.trim()).filter(Boolean))].sort(),
+        [rawRecords]
+    );
+
+    // ── 核心统计（单次遍历，O(n) 而非原来的 6×O(n)） ──
+    const stats = useMemo(() =>
+        computeStats(rawRecords,
+            filterMarket || undefined,
+            filterProduct || undefined,
+            filterDateFrom || undefined,
+            filterDateTo || undefined),
+        [rawRecords, filterMarket, filterProduct, filterDateFrom, filterDateTo]
+    );
+
+    // 预构建市场产品明细 Map（用于 tooltip 快速查找）
+    const marketProductMap = useMemo(() => stats.marketDetailMap, [stats.marketDetailMap]);
+
+    const fetchGlobalStats = useCallback(async () => {
+        setLoading(true);
+        try {
+            // 【核心优化】添加日期范围限制，防止全表扫描
+            // 默认只取最近 3 年数据
+            const result = await fetchDashboardRecords();
+
+            if (result.error) {
+                console.error("Dashboard Fetch Error:", result.error.message);
+                // fallback：尝试不带日期限制的查询
+                const fb = await fetchDashboardRecords(undefined, undefined);
+                if (fb.error) console.error("Fallback also failed:", fb.error.message);
+                else setRawRecords(fb.records);
+            } else {
+                setRawRecords(result.records);
+            }
+        } catch (err) {
+            console.error("Dashboard Fetch Exception:", err);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => { fetchGlobalStats(); }, [fetchGlobalStats]);
+
+    const clearFilters = () => {
+        setFilterMarket(''); setFilterProduct(''); setFilterDateFrom(''); setFilterDateTo('');
     };
 
-    const processRecords = (records: any[]) => {
-        if (records) {
-            // 用户确认：营收由 数量 * 单价 实时计算
-            const getRevenue = (r: any) => (Number(r.quantity) * Number(r.unit_price)) || Number(r.amount) || 0;
+    const hasActiveFilter = !!filterMarket || !!filterProduct || !!filterDateFrom || !!filterDateTo;
+    const refresh = () => { fetchGlobalStats(); };
 
-            const total = records.reduce((sum, r) => sum + getRevenue(r), 0);
-            const invoiced = records.filter(r => r.invoice_status === 'invoiced').reduce((sum, r) => sum + getRevenue(r), 0);
-            const settled = records.filter(r => r.transaction_status === 'completed').reduce((sum, r) => sum + getRevenue(r), 0);
-
-            // 2. 按子公司维度聚合
-            const subMap = new Map();
-            records.forEach(r => {
-                const name = r.organizations?.name || '未知单元';
-                const current = subMap.get(name) || { name, amount: 0, unsettled: 0 };
-                const rev = getRevenue(r);
-                current.amount += rev;
-                if (r.transaction_status !== 'completed') current.unsettled += rev;
-                subMap.set(name, current);
-            });
-
-            // 辅助函数：标准化字符串（平衡匹配度）
-            const normalize = (s: string) => {
-                if (!s) return "";
-                // 仅去除末尾极通用的后缀，保留中间的“农产品/中心/批发”等关键词以防误删
-                return s.trim().replace(/[省市区县市场]$/g, "");
-            };
-
-            // 3. 按市场地理维度聚合 
-            const marketMap = new Map();
-            let matchedCount = 0;
-
-            records.forEach(r => {
-                const loc = r.trade_location?.trim();
-                if (!loc) return;
-                
-                let targetMarket = undefined;
-
-                // Tier 1: 绝对全称匹配 (最高级)
-                if (marketCoords[loc]) {
-                    targetMarket = loc;
-                }
-
-                // Tier 2: 去除空格后的精确匹配
-                if (!targetMarket) {
-                    targetMarket = Object.keys(marketCoords).find(m => m.trim() === loc);
-                }
-
-                // Tier 3: 包含关系或标准化匹配 (退路)
-                if (!targetMarket) {
-                    const normLoc = normalize(loc);
-                    targetMarket = Object.keys(marketCoords).find(m => {
-                        const normM = normalize(m);
-                        return normM === normLoc || m.includes(loc) || loc.includes(m);
-                    });
-                }
-
-                if (targetMarket) {
-                    matchedCount++;
-                    const info = marketCoords[targetMarket];
-                    const current = marketMap.get(targetMarket) || { 
-                        name: targetMarket, 
-                        value: 0, 
-                        city: info.city, 
-                        province: info.province,
-                        coords: info.coordinates
-                    };
-                    current.value += getRevenue(r);
-                    marketMap.set(targetMarket, current);
-                }
-            });
-            setStats({
-                totalRevenue: total,
-                invoicedAmount: invoiced,
-                nonInvoicedAmount: total - invoiced,
-                settlementRate: total > 0 ? (settled / total) * 100 : 0,
-                subsidiaryData: Array.from(subMap.values()),
-                mapData: Array.from(marketMap.values()),
-                diagnostic: {
-                    totalRecords: records.length,
-                    matchedRecords: matchedCount
-                }
-            });
-        }
-    };
-
-    useEffect(() => { fetchGlobalStats(); }, []);
-
-    const mapOption = {
+    // ── ECharts 配置（保持原有 UI 不变） ──
+    const mapOption = useMemo(() => ({
         backgroundColor: 'transparent',
         tooltip: {
             trigger: 'item',
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            borderColor: '#e2e8f0',
-            textStyle: { color: '#0f172a', fontWeight: 'bold' },
+            backgroundColor: 'rgba(255, 255, 255, 0.97)',
+            borderColor: '#e2e8f0', borderWidth: 1,
+            textStyle: { color: '#0f172a' },
             formatter: (params: any) => {
-                if (params.seriesName === '核心市场') return `<div class="p-1 font-bold text-slate-700">${params.name}</div>`;
-                return `<div class="p-1">
-                    <div class="text-xs text-slate-500 mb-1">${params.name}</div>
-                    <div class="text-sm font-extrabold font-mono" style="color: ${params.color}">¥${params.value[2]?.toLocaleString() || 0}</div>
+                if (params.seriesName === '核心市场')
+                    return `<div class="p-2 font-bold text-slate-700">${params.name}<br/><span class="text-xs font-normal text-slate-400">${params.data.city} · ${params.data.province}</span></div>`;
+
+                const loc = params.name;
+                // 【性能优化】用预索引的 Map 替代 O(n) filter
+                const mEntry = marketProductMap.get(loc);
+                const total = params.value[2] || 0;
+                const recCount = mEntry?.recordCount || 0;
+                const prods = mEntry?.products || [];
+
+                let productHtml = '';
+                if (prods.length > 1) {
+                    productHtml = '<div class="mt-2 pt-2 border-t border-slate-100">' +
+                        prods.map(([p, v]: [string, number]) =>
+                            `<div class="flex justify-between text-xs gap-4 py-0.5"><span class="text-slate-500 truncate max-w-[120px]">${p}</span><span class="font-mono font-bold text-slate-700">¥${v.toLocaleString()}</span></div>`
+                        ).join('') +
+                        (prods.length > 5 ? `<div class="text-xs text-slate-400 mt-1">+${prods.length - 5} 个商品</div>` : '') +
+                        '</div>';
+                } else if (prods.length === 1) {
+                    productHtml = `<div class="text-xs text-slate-400 mt-1">${prods[0][0]}</div>`;
+                }
+
+                return `<div class="p-2 min-w-[180px]">
+                    <div class="font-bold text-slate-700 text-sm">${loc}</div>
+                    <div class="text-xs text-slate-400 mb-1">${params.data.city} · ${params.data.province}</div>
+                    <div class="text-xl font-extrabold font-mono mt-1" style="color:${params.color}">¥${total.toLocaleString()}</div>
+                    <div class="text-xs text-slate-400">${recCount} 条记录</div>
+                    ${productHtml}
                 </div>`;
             }
         },
         geo: {
-            map: 'china',
-            roam: true,
-            zoom: 1.2,
-            itemStyle: {
-                areaColor: '#f8fafc',
-                borderColor: '#e2e8f0'
-            },
-            emphasis: {
-                itemStyle: { areaColor: '#f1f5f9' }
-            },
+            map: 'china', roam: true, zoom: 1.2,
+            backgroundColor: '#e8eef5',
+            itemStyle: { areaColor: '#ffffff', borderColor: '#cbd5e1' },
+            emphasis: { itemStyle: { areaColor: '#f1f5f9' } },
             regions: Object.entries(PROVINCE_COLORS).map(([name, color]) => ({
-                name,
-                itemStyle: {
-                    areaColor: name === 'DEFAULT' ? '#f8fafc' : `${color}15` // Extremely light tint for province
-                }
+                name, itemStyle: { areaColor: name === 'DEFAULT' ? '#f8fafc' : `${color}15` }
             }))
         },
         series: [
             {
-                name: '核心市场',
-                type: 'scatter',
-                coordinateSystem: 'geo',
-                zlevel: 1, // 基础点在底层
+                name: '核心市场', type: 'scatter', coordinateSystem: 'geo', zlevel: 1,
                 data: Object.entries(marketCoords).map(([name, info]) => ({
-                    name,
-                    value: info.coordinates,
-                    city: info.city,
-                    province: info.province
+                    name, value: info.coordinates, city: info.city, province: info.province
                 })),
                 symbolSize: 8,
-                itemStyle: { 
-                    color: (params: any) => PROVINCE_COLORS[params.data.province] || PROVINCE_COLORS.DEFAULT,
-                    opacity: 0.6, // 降低不透明度，让上层气泡更清晰
-                    borderColor: '#fff',
-                    borderWidth: 1
-                },
-                label: {
-                    show: false
-                },
-                tooltip: {
-                    show: true,
-                    formatter: (p: any) => `<div class="p-1 font-bold text-slate-700">${p.data.name}</div>`
-                },
-                silent: false
+                itemStyle: {
+                    color: (p: any) => PROVINCE_COLORS[p.data.province] || PROVINCE_COLORS.DEFAULT,
+                    opacity: 0.6, borderColor: '#fff', borderWidth: 1
+                }, label: { show: false },
+                tooltip: { show: true, formatter: (p: any) =>
+                    `<div class="p-2 font-bold text-slate-700">${p.data.name}<br/><span class="text-xs font-normal text-slate-400">${p.data.city} · ${p.data.province}</span></div>`
+                }, silent: false
             },
             {
-                name: '营收气泡',
-                type: 'effectScatter',
-                coordinateSystem: 'geo',
-                zlevel: 10, // 气泡置于最上层
-                rippleEffect: {
-                    brushType: 'stroke',
-                    scale: 3
-                },
+                name: '营收气泡', type: 'effectScatter', coordinateSystem: 'geo', zlevel: 10,
+                rippleEffect: { brushType: 'stroke', scale: 3 },
                 data: stats.mapData.map(item => ({
-                    name: item.name,
-                    province: item.province,
-                    value: [
-                        item.coords[0],
-                        item.coords[1],
-                        item.value
-                    ],
+                    name: item.name, province: item.province,
+                    value: [item.coords[0], item.coords[1], item.value],
                     itemStyle: {
                         color: PROVINCE_COLORS[item.province] || PROVINCE_COLORS.DEFAULT,
-                        shadowBlur: 10,
-                        shadowColor: 'rgba(0,0,0,0.3)'
+                        shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)'
                     }
                 })),
                 symbolSize: (val: any) => {
                     if (!stats.totalRevenue) return 10;
                     const ratio = val[2] / stats.totalRevenue;
-                    // 确保即使是非常小的比例，气泡也清晰可见 (最小10px)
-                    return Math.max(10, Math.min(35, ratio * 150)); 
+                    return Math.max(10, Math.min(35, ratio * 150));
                 },
-                itemStyle: {
-                    opacity: 0.9
-                }
+                itemStyle: { opacity: 0.9 }
             }
         ]
-    };
+    }), [stats, marketProductMap]);
 
     return (
         <div className="p-8 max-w-7xl mx-auto animate-in fade-in duration-1000">
+            {/* 标题栏 */}
             <div className="flex justify-between items-end mb-8 relative">
                 <div>
                     <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">集团财务概览</h2>
                     <p className="text-slate-500 mt-1 text-sm">实时汇总全集团 100+ 经营单元贸易数据</p>
                 </div>
-                
-                {/* 实时数据诊断面板 */}
+
                 <div className="bg-slate-900 text-white p-4 rounded-2xl shadow-xl border border-slate-700 flex gap-6 items-center scale-90 origin-right transition-all hover:scale-100">
                     <div className="flex flex-col">
                         <span className="text-[9px] uppercase font-black text-slate-500 tracking-widest">物理记录</span>
-                        <span className="text-lg font-black font-mono">{(stats.diagnostic.totalRecords).toString().padStart(2, '0')}</span>
+                        <span className="text-lg font-black font-mono">{stats.diagnostic.totalRecords.toString().padStart(2, '0')}</span>
                     </div>
                     <div className="w-px h-8 bg-slate-700"></div>
                     <div className="flex flex-col">
                         <span className="text-[9px] uppercase font-black text-emerald-500 tracking-widest">成功匹配</span>
-                        <span className="text-lg font-black font-mono text-emerald-400">{(stats.diagnostic.matchedRecords).toString().padStart(2, '0')}</span>
+                        <span className="text-lg font-black font-mono text-emerald-400">{stats.diagnostic.matchedRecords.toString().padStart(2, '0')}</span>
                     </div>
                     <div className="w-px h-8 bg-slate-700"></div>
                     <div className="flex flex-col">
@@ -276,6 +325,53 @@ export default function GroupDashboard() {
                         <span className="text-lg font-black font-mono text-blue-400">
                             {stats.diagnostic.totalRecords > 0 ? Math.round((stats.diagnostic.matchedRecords/stats.diagnostic.totalRecords)*100) : 0}%
                         </span>
+                    </div>
+                </div>
+            </div>
+
+            {/* 筛选工具栏 */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mb-6">
+                <div className="flex items-center gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                        <label className="text-xs font-bold text-slate-500 whitespace-nowrap">市场</label>
+                        <select value={filterMarket}
+                            onChange={e => setFilterMarket(e.target.value)}
+                            className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white min-w-[140px]">
+                            <option value="">全部市场</option>
+                            {marketOptions.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <label className="text-xs font-bold text-slate-500 whitespace-nowrap">商品</label>
+                        <select value={filterProduct}
+                            onChange={e => setFilterProduct(e.target.value)}
+                            className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white min-w-[140px]">
+                            <option value="">全部商品</option>
+                            {productOptions.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <label className="text-xs font-bold text-slate-500 whitespace-nowrap">日期</label>
+                        <input type="date" value={filterDateFrom}
+                            onChange={e => setFilterDateFrom(e.target.value)}
+                            className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                        <span className="text-slate-400 text-sm">~</span>
+                        <input type="date" value={filterDateTo}
+                            onChange={e => setFilterDateTo(e.target.value)}
+                            className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+                    </div>
+
+                    <button onClick={clearFilters}
+                        className={`ml-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${hasActiveFilter ? 'border-rose-200 text-rose-500 hover:bg-rose-50' : 'border-slate-200 text-slate-300 cursor-not-allowed'}`}
+                        disabled={!hasActiveFilter}>
+                        清除筛选
+                    </button>
+
+                    <div className="ml-auto flex items-center gap-3 text-xs text-slate-400">
+                        <span className="font-mono">{stats.diagnostic.totalRecords} 条记录</span>
+                        {loading && <span className="text-blue-500 animate-pulse">加载中…</span>}
                     </div>
                 </div>
             </div>
@@ -307,61 +403,135 @@ export default function GroupDashboard() {
                 </div>
             </div>
 
-            {/* 中国地图营收营收透视 */}
+            {/* 全国营收热力透视 */}
             <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden mb-10">
                 <div className="p-6 border-b border-slate-50 flex justify-between items-center">
-                    <h3 className="font-bold text-slate-800">全国营收热力透视 (由 19 核心节点穿透)</h3>
+                    <div className="flex items-center gap-3">
+                        <h3 className="font-bold text-slate-800">全国营收热力透视</h3>
+                        {hasActiveFilter && (
+                            <span className="bg-blue-100 text-blue-600 text-xs font-bold px-2 py-0.5 rounded-full">已筛选</span>
+                        )}
+                    </div>
                     <div className="flex gap-2 text-[10px] font-bold">
                         <span className="flex items-center gap-1 text-slate-400"><span className="w-2 h-2 rounded-full bg-slate-200"></span> 核心点位</span>
                         <span className="flex items-center gap-1 text-blue-500"><span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> 实时营收</span>
                     </div>
                 </div>
-                <div className="p-2 h-[600px] w-full relative">
-                    <ReactECharts 
-                        option={mapOption} 
-                        style={{ height: '100%', width: '100%' }}
-                        opts={{ renderer: 'canvas' }}
-                        notMerge={true}
-                    />
-                    
-                    {/* 地图视觉层叠修正提示 */}
+                <div className="p-2 h-[750px] w-full relative bg-[#e8eef5] rounded-b-2xl overflow-hidden">
+                    {loading ? (
+                        <div className="flex items-center justify-center h-full text-slate-400 text-sm">加载数据中…</div>
+                    ) : (
+                        <ReactECharts option={mapOption}
+                            style={{ height: '100%', width: '100%', backgroundColor: '#e8eef5' }}
+                            opts={{ renderer: 'canvas' }} notMerge={true} />
+                    )}
+
                     {stats.diagnostic.matchedRecords === 0 && stats.diagnostic.totalRecords > 0 && (
                         <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm">
                             <div className="bg-white p-8 rounded-3xl shadow-2xl border border-rose-100 text-center max-w-sm">
                                 <div className="text-4xl mb-4">📍</div>
                                 <h4 className="text-lg font-black text-slate-900 mb-2">匹配引擎警告</h4>
-                                <p className="text-sm text-slate-500 mb-6">抓取到 {stats.diagnostic.totalRecords} 条记录，但由于地点名称不匹配（如空格、简称差异），无法在地图映射显示。</p>
-                                <button onClick={() => fetchGlobalStats()} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold">强制重新同步</button>
+                                <p className="text-sm text-slate-500 mb-6">
+                                    {hasActiveFilter
+                                        ? `筛选条件下无匹配的地理位置记录，请尝试调整筛选条件。`
+                                        : `抓取到 ${stats.diagnostic.totalRecords} 条记录，但由于地点名称不匹配，无法在地图映射显示。`}
+                                </p>
+                                <button onClick={clearFilters}
+                                    className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold">清除筛选重试</button>
                             </div>
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* 子公司收入排行与风险透视 */}
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-slate-50">
-                    <h3 className="font-bold text-slate-800">各经营单元收入与风险透视</h3>
-                </div>
-                <div className="p-6">
-                    <div className="space-y-6">
-                        {stats.subsidiaryData.map(sub => (
-                            <div key={sub.name} className="relative">
-                                <div className="flex justify-between mb-2 text-sm">
-                                    <span className="font-bold text-slate-700">{sub.name}</span>
-                                    <span className="text-slate-400 text-xs">
-                                        营收: <span className="text-slate-900 font-black">¥{sub.amount.toLocaleString()}</span> |
-                                        风险: <span className="text-rose-500 font-black">¥{sub.unsettled.toLocaleString()}</span>
-                                    </span>
-                                </div>
-                                <div className="h-4 bg-slate-50 rounded-full overflow-hidden flex shadow-inner">
-                                    <div className="h-full bg-blue-500 transition-all duration-1000 relative group" style={{ width: `${(sub.amount / stats.totalRevenue) * 100}%` }}>
-                                        <div className="absolute right-0 top-0 bottom-0 bg-white/30 w-px"></div>
-                                    </div>
-                                    <div className="h-full bg-rose-200 transition-all duration-1000" style={{ width: `${(sub.unsettled / stats.totalRevenue) * 100}%` }}></div>
-                                </div>
+            {/* Top10 商品 & Top10 公司 */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+                    <div className="p-5 border-b border-slate-50 flex justify-between items-center">
+                        <h3 className="font-bold text-slate-800 text-sm">商品营收排行</h3>
+                        <span className="text-xs text-slate-400">{stats.topProducts.length} 个品类</span>
+                    </div>
+                    <div className="p-5">
+                        {stats.topProducts.length === 0 ? (
+                            <p className="text-center text-slate-400 text-sm py-8">暂无数据</p>
+                        ) : (
+                            <div className="space-y-4">
+                                {stats.topProducts.map((item, i) => {
+                                    const pct = stats.totalRevenue > 0 ? (item.amount / stats.totalRevenue) * 100 : 0;
+                                    const rankColors = ['text-amber-500', 'text-slate-400', 'text-amber-600'];
+                                    return (
+                                        <div key={item.name}>
+                                            <div className="flex justify-between items-center mb-1.5">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <span className={`text-xs font-black w-5 shrink-0 ${i < 3 ? rankColors[i] : 'text-slate-300'}`}>{i + 1}</span>
+                                                    <span className="text-sm font-medium text-slate-700 truncate">{item.name}</span>
+                                                </div>
+                                                <span className="text-sm font-black text-slate-800 ml-3 shrink-0 font-mono">
+                                                    ¥{item.amount.toLocaleString()}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-3 mb-1.5 ml-7">
+                                                <span className="text-xs text-rose-400 font-medium" title={item.maxMarket}>
+                                                    ↑ ¥{item.maxPrice.toFixed(2)}{item.maxMarket ? ` @${getAbbr(item.maxMarket)}` : ''}
+                                                </span>
+                                                <span className="text-slate-200">|</span>
+                                                <span className="text-xs text-emerald-400 font-medium" title={item.minMarket}>
+                                                    ↓ ¥{item.minPrice.toFixed(2)}{item.minMarket ? ` @${getAbbr(item.minMarket)}` : ''}
+                                                </span>
+                                            </div>
+                                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden ml-7">
+                                                <div className="h-full rounded-full transition-all duration-700"
+                                                    style={{
+                                                        width: `${pct}%`,
+                                                        backgroundColor: i === 0 ? '#3b82f6' : i === 1 ? '#6366f1' : i === 2 ? '#8b5cf6' : '#94a3b8'
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                             </div>
-                        ))}
+                        )}
+                    </div>
+                </div>
+
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+                    <div className="p-5 border-b border-slate-50 flex justify-between items-center">
+                        <h3 className="font-bold text-slate-800 text-sm">公司营收排行</h3>
+                        <span className="text-xs text-slate-400">{stats.topCompanies.length} 个公司</span>
+                    </div>
+                    <div className="p-5">
+                        {stats.topCompanies.length === 0 ? (
+                            <p className="text-center text-slate-400 text-sm py-8">暂无数据</p>
+                        ) : (
+                            <div className="space-y-3">
+                                {stats.topCompanies.map((item, i) => {
+                                    const pct = stats.totalRevenue > 0 ? (item.amount / stats.totalRevenue) * 100 : 0;
+                                    const rankColors = ['text-amber-500', 'text-slate-400', 'text-amber-600'];
+                                    return (
+                                        <div key={item.name}>
+                                            <div className="flex justify-between items-center mb-1">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <span className={`text-xs font-black w-5 shrink-0 ${i < 3 ? rankColors[i] : 'text-slate-300'}`}>{i + 1}</span>
+                                                    <span className="text-sm font-medium text-slate-700 truncate">{item.name}</span>
+                                                </div>
+                                                <span className="text-sm font-black text-slate-800 ml-3 shrink-0 font-mono">
+                                                    ¥{item.amount.toLocaleString()}
+                                                </span>
+                                            </div>
+                                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                <div className="h-full rounded-full transition-all duration-700"
+                                                    style={{
+                                                        width: `${pct}%`,
+                                                        backgroundColor: i === 0 ? '#10b981' : i === 1 ? '#14b8a6' : i === 2 ? '#06b6d4' : '#94a3b8'
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>

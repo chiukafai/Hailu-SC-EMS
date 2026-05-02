@@ -1,0 +1,27 @@
+# === macOS 元数据文件 (移动硬盘 exFAT 必须忽略) ===
+._*
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# === Node.js / 前端 ===
+node_modules/
+dist/
+.env
+.env.local
+*.log
+
+# === 编辑器/IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === WorkBuddy 工作目录（本地配置，不需要同步）===
+.workbuddy/
+
+# === 临时文件 ===
+*.tmp
+*.temp
+Thumbs.db

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import GroupDashboard from './features/dashboard/GroupDashboard';
 import OrgManager from './features/organizations/OrgManager';
 import ClientManager from './features/clients/ClientManager';
@@ -13,7 +13,7 @@ const ALL_TABS = [
   { id: 'org', label: '集团架构' },
   { id: 'dept', label: '部门管理' },
   { id: 'client', label: '合作客户档案' },
-  { id: 'invoices', label: '业务贸易数据中心' },
+  { id: 'invoices', label: '业务贸易数据' },
   { id: 'financial', label: '财务数据' },
 ];
 
@@ -87,7 +87,7 @@ export default function App() {
                   onClick={() => setActiveTab('users')}
                   className={`ml-2 px-4 py-1.5 rounded-lg text-xs font-black transition-all whitespace-nowrap ${activeTab === 'users' ? 'bg-purple-600 text-white shadow-sm' : 'text-purple-600 hover:bg-purple-100'}`}
                 >
-                  🏰 人权系统
+                  🏰 系统设置
                 </button>
               )}
             </div>

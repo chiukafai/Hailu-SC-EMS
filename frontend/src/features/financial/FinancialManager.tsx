@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import TaxInvoiceManager from './TaxInvoiceManager';
+import ContractManager from './ContractManager';
+import ExpenseManager from './ExpenseManager';
 
 export default function FinancialManager({ permissionLevel = 'edit', currentUser }: { permissionLevel?: string, currentUser?: any }) {
     const [activeSubTab, setActiveSubTab] = useState('invoices');
 
     const SUB_TABS = [
-        { id: 'invoices', label: '发票明细', icon: '🧾' },
-        { id: 'contracts', label: '合同管理', icon: '📝' },
-        { id: 'expenses', label: '贸易费用', icon: '💸' },
+        { id: 'invoices',   label: '发票明细', icon: '🧾' },
+        { id: 'contracts',  label: '合同管理', icon: '📝' },
+        { id: 'expenses',   label: '贸易费用', icon: '💸' },
     ];
 
     return (
@@ -36,21 +38,11 @@ export default function FinancialManager({ permissionLevel = 'edit', currentUser
                 {activeSubTab === 'invoices' && (
                     <TaxInvoiceManager permissionLevel={permissionLevel} currentUser={currentUser} />
                 )}
-                
                 {activeSubTab === 'contracts' && (
-                    <div className="flex flex-col items-center justify-center p-32 text-slate-300">
-                        <div className="text-6xl mb-6">🚧</div>
-                        <h2 className="text-2xl font-black text-slate-400 mb-2">合同管理模块</h2>
-                        <p className="font-bold text-slate-400">该功能模块正在由开发团队紧张搭建中，敬请期待...</p>
-                    </div>
+                    <ContractManager permissionLevel={permissionLevel} currentUser={currentUser} />
                 )}
-
                 {activeSubTab === 'expenses' && (
-                    <div className="flex flex-col items-center justify-center p-32 text-slate-300">
-                        <div className="text-6xl mb-6">🚧</div>
-                        <h2 className="text-2xl font-black text-slate-400 mb-2">贸易费用模块</h2>
-                        <p className="font-bold text-slate-400">该功能模块设计开发中，即将上线...</p>
-                    </div>
+                    <ExpenseManager permissionLevel={permissionLevel} currentUser={currentUser} />
                 )}
             </div>
         </div>

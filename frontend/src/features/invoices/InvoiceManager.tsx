@@ -25,6 +25,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
 
     const [aggregatedStats, setAggregatedStats] = useState({ totalRevenue: 0, invoicedRevenue: 0, pendingCount: 0 });
     const [totalRecordsCount, setTotalRecordsCount] = useState(0);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [debouncedFilters, setDebouncedFilters] = useState(searchFilters);
     const [fetchError, setFetchError] = useState<string | null>(null);
 
@@ -294,11 +295,25 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         setIsModalOpen(false);
     };
 
+    // 选中当前页全部
+    const handleSelectCurrentPage = () => {
+        const newSet = new Set(selectedIds);
+        records.forEach(r => newSet.add(r.id));
+        setSelectedIds(newSet);
+    };
+
+    // 反选当前页
+    const handleDeselectCurrentPage = () => {
+        const newSet = new Set(selectedIds);
+        records.forEach(r => newSet.delete(r.id));
+        setSelectedIds(newSet);
+    };
+
     const handleBatchDelete = async () => {
-        if (records.length === 0) return;
-        if (window.confirm(`🧨 危险操作：确定要一次性彻底删除当前本页显示的 ${records.length} 条业务记录吗？(如需删除更多页，建议利用后端工具)\n删除后数据不可恢复！`)) {
+        if (selectedIds.size === 0) return;
+        if (window.confirm(`🧨 危险操作：确定要彻底删除选中的 ${selectedIds.size} 条业务记录吗？\n删除后数据不可恢复！`)) {
             try {
-                const idsToDelete = records.map(r => r.id);
+                const idsToDelete = Array.from(selectedIds);
                 const chunkSize = 100;
                 for (let i = 0; i < idsToDelete.length; i += chunkSize) {
                     const chunk = idsToDelete.slice(i, i + chunkSize);
@@ -306,12 +321,51 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                     if (error) throw error;
                 }
                 alert(`✅ 成功清洗 ${idsToDelete.length} 条业务数据！`);
+                setSelectedIds(new Set());
                 fetchData();
             } catch (err: any) {
                 alert('批量删除部分失败: ' + err.message);
             }
         }
     };
+
+    // 导出数据（支持当前页或全部已选）
+    const handleExport = (scope: 'page' | 'selected') => {
+        const dataToExport = scope === 'page' ? records : records.filter(r => selectedIds.has(r.id));
+        const exportData = dataToExport.map(r => {
+            const { subject, client } = getRecordEntities(r);
+            return {
+                '项目名称': r.project_name,
+                '业务归属部门': allDepartments.find(d => d.id === r.department_id)?.name || '',
+                '交易主体': subject.name,
+                '主体类型': subject.type === 'org' ? '集团' : '客商',
+                '客户名称': client.name,
+                '客户类型': client.type === 'org' ? '集团' : '客商',
+                '商品信息': r.product_info,
+                '发生日期': r.trade_date,
+                '交易地点': r.trade_location,
+                '交易金额': r.amount,
+                '数量': r.quantity,
+                '单价': r.unit_price,
+                '发票状态': r.invoice_status === 'invoiced' ? '已开票' : '待开票',
+                '开票完成日期': r.invoice_completed_date || '',
+                '资金流水状态': r.transaction_status === 'completed' ? '已结清' : '待确认',
+                '流水完成日期': r.transaction_completed_date || '',
+                '已核销金额': tradeLinks[r.id] || 0,
+                '核销率': `${Math.min(100, Math.round(((tradeLinks[r.id] || 0) / (r.amount || 1)) * 100))}%`,
+                '业务归属部门ID': r.department_id,
+                '备注': r.notes,
+                '创建时间': r.created_at
+            };
+        });
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '业务记录');
+        const label = scope === 'page' ? '当前页' : '已选';
+        XLSX.writeFile(wb, `海露业务贸易记录_${label}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    };
+
+    const isAllPageSelected = records.length > 0 && records.every(r => selectedIds.has(r.id));
 
     const handleDelete = async (id: string, projectName: string) => {
         if (window.confirm(`确认删除此涉猎项目 [${projectName || '无名称业务'}] 的所有业务数据吗？`)) {
@@ -497,7 +551,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
     return (
         <div className="p-8 max-w-[1600px] mx-auto print:p-0">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 print:hidden">
-                <h2 className="text-2xl font-black text-slate-800">业务贸易数据中心</h2>
+                <h2 className="text-2xl font-black text-slate-800">业务贸易数据</h2>
                 <div className="flex gap-2 w-full md:w-auto flex-wrap justify-end">
                     {canEdit && (
                     <button onClick={startAdd} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl text-[13px] font-bold flex items-center justify-center transition-all shadow-lg shadow-indigo-600/20">
@@ -541,10 +595,40 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                         </div>
                     )}
                     {canEdit && (
-                        <button onClick={handleBatchDelete} disabled={totalRecordsCount === 0} className="bg-rose-50 text-rose-600 border border-rose-100 px-4 py-2.5 rounded-xl text-[12px] font-black hover:bg-rose-600 hover:text-white transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed">
-                            🗑️ 批量清除({totalRecordsCount})
-                        </button>
+                        <div className="flex gap-2 items-center flex-wrap">
+                            {selectedIds.size > 0 ? (
+                                <>
+                                    <button onClick={handleDeselectCurrentPage} className="bg-slate-100 text-slate-600 border border-slate-200 px-4 py-2.5 rounded-xl text-[12px] font-black hover:bg-slate-200 transition-colors flex items-center">
+                                        🚫 清空已选
+                                    </button>
+                                    <button onClick={handleBatchDelete} className="bg-rose-50 text-rose-600 border border-rose-100 px-4 py-2.5 rounded-xl text-[12px] font-black hover:bg-rose-600 hover:text-white transition-colors flex items-center animate-bounce shadow-lg shadow-rose-100">
+                                        🗑️ 删除已选 ({selectedIds.size})
+                                    </button>
+                                </>
+                            ) : (
+                                <button onClick={handleSelectCurrentPage} disabled={records.length === 0} className="bg-indigo-50 text-indigo-600 border border-indigo-100 px-4 py-2.5 rounded-xl text-[12px] font-black hover:bg-indigo-600 hover:text-white transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed">
+                                    ☑️ 批量选中当前页
+                                </button>
+                            )}
+                        </div>
                     )}
+                    {/* 导出按钮 */}
+                    <div className="relative group">
+                        <button className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl text-sm font-black transition-all shadow-lg shadow-blue-100 flex items-center gap-1.5">
+                            📤 导出
+                            <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+                        </button>
+                        <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                            <button onClick={() => handleExport('page')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2">
+                                <span className="text-blue-500">📄</span> 导出当前页
+                                <span className="ml-auto text-[10px] text-slate-400 font-normal">({records.length})</span>
+                            </button>
+                            <button onClick={() => handleExport('selected')} disabled={selectedIds.size === 0} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2 border-t border-slate-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                                <span className="text-emerald-500">📋</span> 导出已选
+                                <span className="ml-auto text-[10px] text-slate-400 font-normal">({selectedIds.size})</span>
+                            </button>
+                        </div>
+                    </div>
                     <button onClick={() => window.print()} className="bg-slate-100 px-4 py-2.5 rounded-xl hover:bg-slate-200 text-sm font-bold text-slate-600 transition-colors" title="打印记录">
                         🖨️ 打印报表
                     </button>
@@ -643,6 +727,14 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                     <table className="w-full text-left">
                         <thead>
                             <tr className="text-slate-400 text-xs font-bold uppercase border-b">
+                                <th className="pb-4 w-10">
+                                    <input type="checkbox" className="w-4 h-4 rounded-md border-slate-200 text-indigo-600 focus:ring-indigo-500 cursor-pointer" checked={isAllPageSelected} onChange={e => {
+                                        const newSet = new Set(selectedIds);
+                                        if (e.target.checked) records.forEach(r => newSet.add(r.id));
+                                        else records.forEach(r => newSet.delete(r.id));
+                                        setSelectedIds(newSet);
+                                    }} />
+                                </th>
                                 <th className="pb-4">贸易项目归属</th>
                                 <th className="pb-4">交易主体与商品</th>
                                 <th className="pb-4">交易金额</th>
@@ -653,7 +745,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                         <tbody className="divide-y divide-slate-50">
                              {records.length === 0 ? (
                                 <tr>
-                                    <td colSpan={5} className="text-center py-20 bg-slate-50 rounded-2xl">
+                                    <td colSpan={6} className="text-center py-20 bg-slate-50 rounded-2xl">
                                         {fetchError ? (
                                             <div className="flex flex-col items-center gap-3">
                                                 <div className="text-rose-500 font-black text-lg">⚠️ 数据加载故障</div>
@@ -669,7 +761,15 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                                     </td>
                                 </tr>
                             ) : records.map(r => (
-                                <tr key={r.id} className="group hover:bg-slate-50">
+                                <tr key={r.id} className={`group hover:bg-slate-50 ${selectedIds.has(r.id) ? 'bg-blue-50/50' : ''}`}>
+                                    <td className="py-4 align-top">
+                                        <input type="checkbox" className="w-4 h-4 rounded-md border-slate-200 text-indigo-600 focus:ring-indigo-500 cursor-pointer" checked={selectedIds.has(r.id)} onChange={() => {
+                                            const newSet = new Set(selectedIds);
+                                            if (newSet.has(r.id)) newSet.delete(r.id);
+                                            else newSet.add(r.id);
+                                            setSelectedIds(newSet);
+                                        }} />
+                                    </td>
                                     <td className="py-4 align-top">
                                         <div className="flex flex-col gap-1.5 pt-1">
                                             <div className="text-sm font-black text-slate-800 break-words max-w-[180px] leading-tight filter drop-shadow-sm">

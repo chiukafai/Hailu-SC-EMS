@@ -9,6 +9,6 @@ async function check() {
     trade_keys: invData && invData.length > 0 ? Object.keys(invData[0]) : "Empty",
     tax_keys: taxData && taxData.length > 0 ? Object.keys(taxData[0]) : "Empty"
   };
-  fs.writeFileSync('/tmp/schema_output.json', JSON.stringify(res, null, 2));
+  fs.writeFileSync('./schema_output.json', JSON.stringify(res, null, 2));
 }
 check();
