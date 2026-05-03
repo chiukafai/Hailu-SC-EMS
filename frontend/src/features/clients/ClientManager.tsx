@@ -6,8 +6,8 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
     const canEdit = permissionLevel === 'edit' || permissionLevel === 'head' || permissionLevel === 'admin';
     const [clients, setClients] = useState<any[]>([]);
     const [allDepartments, setAllDepartments] = useState<any[]>([]);
-    const [totalCount, setTotalCount] = useState(0);       // 【新增】服务端返回的总数
-    // const [loading, setLoading] = useState(false);         // 【预留】加载状态（UI 待对接）
+    const [totalCount, setTotalCount] = useState(0);
+    const [loading, setLoading] = useState(false);
     const [searchFilters, setSearchFilters] = useState({ 
         full_name: '', 
         tax_id: '', 
@@ -39,56 +39,97 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
 
     const [formData, setFormData] = useState(initialForm);
 
-    // 【优化】使用服务端分页，替代原来的 while-loop 全量拉取
-    // 之前: while 循环每次取 1000 条直到取完全表
-    // 现在: 只取当前页数据 + 总数（1次请求）
+    const [fetchError, setFetchError] = useState<string | null>(null);
+
+    // 【优化】使用服务端分页 + 健壮容错 + 加载状态
     const fetchClients = async () => {
-        // setLoading(true);  // UI 对接后启用
+        setLoading(true);
+        setFetchError(null);
 
         const from = (currentPage - 1) * pageSize;
         const to = from + pageSize - 1;
 
-        let query = supabase
-            .from('global_clients')
-            .select(`
-                *,
-                departments:department_id (name)
-            `, { count: 'exact' })
-            .order('added_date', { ascending: false, nullsFirst: false })
-            .range(from, to);
+        try {
+            // 策略1：带 JOIN 的查询（获取部门名称）
+            let query = supabase
+                .from('global_clients')
+                .select(`
+                    *,
+                    departments:department_id (name)
+                `, { count: 'exact' })
+                .order('added_date', { ascending: false, nullsFirst: false })
+                .range(from, to);
 
-        // 权限过滤
-        if (permissionLevel === 'head' || permissionLevel === 'edit') {
-            if (currentUser?.department_id) {
-                query = query.eq('department_id', currentUser.department_id);
-            } else if (currentUser?.id) {
-                query = query.eq('created_by', currentUser.id);
+            // 权限过滤（admin 跳过）
+            if (permissionLevel === 'head' || permissionLevel === 'edit') {
+                if (currentUser?.department_id) {
+                    query = query.eq('department_id', currentUser.department_id);
+                } else if (currentUser?.id) {
+                    query = query.eq('created_by', currentUser.id);
+                }
             }
-        }
 
-        // 搜索条件转为服务端过滤
-        const { full_name, tax_id, risk_level, startDate, endDate } = searchFilters;
-        if (full_name) {
-            query = query.or(`full_name.ilike.%${full_name}%,short_name.ilike.%${full_name}%`);
-        }
-        if (tax_id) query = query.ilike('tax_id', `%${tax_id}%`);
-        if (risk_level) query = query.eq('risk_level', risk_level);
-        if (startDate) query = query.gte('added_date', startDate);
-        if (endDate) query = query.lte('added_date', endDate);
+            // 搜索条件转为服务端过滤
+            const { full_name, tax_id, risk_level, startDate, endDate } = searchFilters;
+            if (full_name) {
+                query = query.or(`full_name.ilike.%${full_name}%,short_name.ilike.%${full_name}%`);
+            }
+            if (tax_id) query = query.ilike('tax_id', `%${tax_id}%`);
+            if (risk_level) query = query.eq('risk_level', risk_level);
+            if (startDate) query = query.gte('added_date', startDate);
+            if (endDate) query = query.lte('added_date', endDate);
 
-        const { data, count, error } = await query;
+            let { data, count, error } = await query;
 
-        if (error) {
-            console.error('Fetch clients error:', error);
+            // 策略2：如果 JOIN 失败，降级为不带 JOIN 的查询
+            if (error) {
+                console.warn('[ClientManager] JOIN query failed, falling back:', error.message);
+                let fallbackQuery = supabase
+                    .from('global_clients')
+                    .select('*', { count: 'exact' })
+                    .order('added_date', { ascending: false, nullsFirst: false })
+                    .range(from, to);
+
+                // 重新应用权限过滤
+                if (permissionLevel === 'head' || permissionLevel === 'edit') {
+                    if (currentUser?.department_id) {
+                        fallbackQuery = fallbackQuery.eq('department_id', currentUser.department_id);
+                    } else if (currentUser?.id) {
+                        fallbackQuery = fallbackQuery.eq('created_by', currentUser.id);
+                    }
+                }
+                if (full_name) fallbackQuery = fallbackQuery.or(`full_name.ilike.%${full_name}%,short_name.ilike.%${full_name}%`);
+                if (tax_id) fallbackQuery = fallbackQuery.ilike('tax_id', `%${tax_id}%`);
+                if (risk_level) fallbackQuery = fallbackQuery.eq('risk_level', risk_level);
+                if (startDate) fallbackQuery = fallbackQuery.gte('added_date', startDate);
+                if (endDate) fallbackQuery = fallbackQuery.lte('added_date', endDate);
+
+                const fb = await fallbackQuery;
+                data = fb.data;
+                count = fb.count;
+                error = fb.error;
+            }
+
+            if (error) {
+                console.error('[ClientManager] Final query error:', error);
+                setFetchError(`查询失败: ${error.message}`);
+                setClients([]);
+                setTotalCount(0);
+            } else {
+                console.log(`[ClientManager] Loaded ${data?.length ?? 0} clients (total: ${count})`);
+                const mappedClients = (data ?? []).map(c => {
+                    const deptName = Array.isArray(c.departments) ? c.departments[0]?.name : (c.departments as any)?.name;
+                    return { ...c, department_name: deptName || '' };
+                });
+                setClients(mappedClients);
+                setTotalCount(count ?? 0);
+                setFetchError(null);
+            }
+        } catch (err: any) {
+            console.error('[ClientManager] Unexpected error:', err);
+            setFetchError(`网络异常: ${err.message || '请检查网络连接'}`);
             setClients([]);
             setTotalCount(0);
-        } else {
-            const mappedClients = (data ?? []).map(c => {
-                const deptName = Array.isArray(c.departments) ? c.departments[0]?.name : c.departments?.name;
-                return { ...c, department_name: deptName || '' };
-            });
-            setClients(mappedClients);
-            setTotalCount(count ?? 0);
         }
 
         // 字典数据（仅在空时加载一次）
@@ -97,7 +138,7 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
             if (deptData) setAllDepartments(deptData);
         }
 
-        // setLoading(false);  // UI 对接后启用
+        setLoading(false);
     };
 
     useEffect(() => {

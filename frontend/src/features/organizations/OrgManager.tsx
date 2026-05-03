@@ -3,7 +3,7 @@ import { supabase } from '../../api/supabase';
 import * as XLSX from 'xlsx';
 
 export default function OrgManager({ permissionLevel = 'edit' }: { permissionLevel?: string }) {
-    const canEdit = permissionLevel === 'edit';
+    const canEdit = permissionLevel === 'edit' || permissionLevel === 'admin';
     const [orgs, setOrgs] = useState<any[]>([]);
     const [searchFilters, setSearchFilters] = useState({ 
         name: '', 

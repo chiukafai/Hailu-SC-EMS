@@ -3,10 +3,11 @@ import { supabase } from '../../api/supabase';
 import * as XLSX from 'xlsx';
 
 export default function InvoiceManager({ permissionLevel = 'edit', currentUser }: { permissionLevel?: string, currentUser?: any }) {
-    const canEdit = permissionLevel === 'edit';
+    const canEdit = permissionLevel === 'edit' || permissionLevel === 'admin';
     const [records, setRecords] = useState<any[]>([]);
     const [orgs, setOrgs] = useState<any[]>([]);
     const [clients, setClients] = useState<any[]>([]);
+    const [products, setProducts] = useState<any[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
 
     const [allDepartments, setAllDepartments] = useState<any[]>([]);
@@ -22,6 +23,8 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
     const [pageSize, setPageSize] = useState(50);
     const [currentPage, setCurrentPage] = useState(1);
     const [tradeLinks, setTradeLinks] = useState<Record<string, number>>({});
+    const [attachmentsMap, setAttachmentsMap] = useState<Record<string, any[]>>({});
+    const [isUploadingFile, setIsUploadingFile] = useState(false);
 
     const [aggregatedStats, setAggregatedStats] = useState({ totalRevenue: 0, invoicedRevenue: 0, pendingCount: 0 });
     const [totalRecordsCount, setTotalRecordsCount] = useState(0);
@@ -37,7 +40,10 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         amount: 0, is_invoiced: true, has_cashflow: false,
         project_name: '', product_info: '', quantity: 1, unit_price: 0, notes: '',
         trade_date: new Date().toISOString().split('T')[0], trade_location: '',
-        invoice_handler_dept_id: '', cashier_handler_dept_id: '', department_id: ''
+        invoice_handler_dept_id: '', cashier_handler_dept_id: '', department_id: '',
+        proof_image: '',
+        product_id: null as string | null,
+        cloud_attachments: [] as any[]
     });
 
     // Helper to get entity name from unified pool
@@ -143,9 +149,11 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         const { data: o } = await supabase.from('organizations').select('*');
         const { data: c } = await supabase.from('global_clients').select('*');
         const { data: d } = await supabase.from('departments').select('id, name');
+        const { data: p } = await supabase.from('products').select('*');
         if (o) setOrgs(o);
         if (c) setClients(c);
         if (d) setAllDepartments(d);
+        if (p) setProducts(p);
 
         try {
             const { data: stats, error: rpcError } = await supabase.rpc('get_invoice_stats', {
@@ -193,6 +201,16 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                     totals[lt.trade_id] = (totals[lt.trade_id] || 0) + Number(lt.allocated_amount);
                 });
                 setTradeLinks(totals);
+
+                const { data: atts } = await supabase.from('system_attachments').select('*').eq('relate_module', 'invoices').in('relate_id', tradeIds);
+                const attMap: Record<string, any[]> = {};
+                atts?.forEach((a: any) => {
+                    if (!attMap[a.relate_id]) attMap[a.relate_id] = [];
+                    attMap[a.relate_id].push(a);
+                });
+                setAttachmentsMap(attMap);
+            } else {
+                setAttachmentsMap({});
             }
         }
     };
@@ -261,6 +279,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
             is_invoiced: record.invoice_status === 'invoiced',
             has_cashflow: record.transaction_status === 'completed',
             project_name: record.project_name || '',
+            product_id: record.product_id || null,
             product_info: record.product_info || '',
             quantity: record.quantity || 1,
             unit_price: record.unit_price || 0,
@@ -269,8 +288,17 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
             trade_location: record.trade_location || '',
             invoice_handler_dept_id: record.invoice_handler_dept_id || '',
             cashier_handler_dept_id: record.cashier_handler_dept_id || '',
-            department_id: record.department_id || ''
+            department_id: record.department_id || '',
+            proof_image: '',
+            cloud_attachments: attachmentsMap[record.id] || []
         });
+
+        // 提取图片和真实备注
+        const rawNotes = record.notes || '';
+        const imgMatch = rawNotes.match(/\[IMG:(data:image\/[^\]]+)\]/);
+        if (imgMatch) {
+            setFormData(prev => ({ ...prev, proof_image: imgMatch[1], notes: rawNotes.replace(imgMatch[0], '').trim() }));
+        }
 
         // Initialize searches with current values
         setSubjectSearch(getEntityName(subject_id));
@@ -281,7 +309,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
 
     const startAdd = () => {
         setEditingId(null);
-        setFormData({ subject_id: '', client_id: '', amount: 0, is_invoiced: true, has_cashflow: false, project_name: '', product_info: '', quantity: 1, unit_price: 0, notes: '', trade_date: new Date().toISOString().split('T')[0], trade_location: '', invoice_handler_dept_id: '', cashier_handler_dept_id: '', department_id: currentUser?.department_id || '' });
+        setFormData({ subject_id: '', client_id: '', amount: 0, is_invoiced: true, has_cashflow: false, project_name: '', product_info: '', product_id: null, quantity: 1, unit_price: 0, notes: '', trade_date: new Date().toISOString().split('T')[0], trade_location: '', invoice_handler_dept_id: '', cashier_handler_dept_id: '', department_id: currentUser?.department_id || '', proof_image: '', cloud_attachments: [] });
         setSubjectSearch('');
         setClientSearch('');
         setIsModalOpen(true);
@@ -289,7 +317,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
 
     const resetForm = () => {
         setEditingId(null);
-        setFormData({ subject_id: '', client_id: '', amount: 0, is_invoiced: true, has_cashflow: false, project_name: '', product_info: '', quantity: 1, unit_price: 0, notes: '', trade_date: new Date().toISOString().split('T')[0], trade_location: '', invoice_handler_dept_id: '', cashier_handler_dept_id: '', department_id: currentUser?.department_id || '' });
+        setFormData({ subject_id: '', client_id: '', amount: 0, is_invoiced: true, has_cashflow: false, project_name: '', product_info: '', product_id: null, quantity: 1, unit_price: 0, notes: '', trade_date: new Date().toISOString().split('T')[0], trade_location: '', invoice_handler_dept_id: '', cashier_handler_dept_id: '', department_id: currentUser?.department_id || '', proof_image: '', cloud_attachments: [] });
         setSubjectSearch('');
         setClientSearch('');
         setIsModalOpen(false);
@@ -369,6 +397,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
 
     const handleDelete = async (id: string, projectName: string) => {
         if (window.confirm(`确认删除此涉猎项目 [${projectName || '无名称业务'}] 的所有业务数据吗？`)) {
+            await supabase.from('system_attachments').delete().eq('relate_id', id);
             const { error } = await supabase.from('invoices').delete().eq('id', id);
             if (error) alert(`删除失败: ${error.message}`);
             else fetchData();
@@ -381,8 +410,15 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         const [subType, subVal] = formData.subject_id.split(':');
         const [cliType, cliVal] = formData.client_id.split(':');
 
+        // 将图片合并到备注字段
+        let finalNotes = formData.notes.trim();
+        if (formData.proof_image) {
+            finalNotes += `\n[IMG:${formData.proof_image}]`;
+        }
+
         const submitData: any = {
             ...formData,
+            notes: finalNotes.trim(),
             org_id: subType === 'org' ? subVal : null,
             subject_client_tax_id: subType === 'client' ? subVal : null,
             client_tax_id: cliType === 'client' ? cliVal : null,
@@ -400,6 +436,8 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         delete (submitData as any).is_invoiced;
         delete (submitData as any).subject_id;
         delete (submitData as any).client_id;
+        delete (submitData as any).proof_image;
+        delete (submitData as any).cloud_attachments;
 
         if (!editingId) {
             submitData.invoice_no = `TR_${Date.now()}`;
@@ -408,15 +446,34 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         if (formData.is_invoiced) submitData.invoice_completed_date = new Date().toISOString();
         if (formData.has_cashflow) submitData.transaction_completed_date = new Date().toISOString();
 
+        let currentId = editingId;
         if (editingId) {
             const { error } = await supabase.from('invoices').update(submitData).eq('id', editingId);
-            if (error) alert(`更新失败: ${error.message}\n(如果是字段缺失错误, 请联系管理员添加 subject_client_tax_id 和 client_org_id 字段)`);
-            else { alert('业务记录已更新'); resetForm(); fetchData(); }
+            if (error) { alert(`更新失败: ${error.message}`); return; }
         } else {
-            const { error } = await supabase.from('invoices').insert([submitData]);
-            if (error) alert(`录入失败: ${error.message}\n(如果是字段缺失错误, 请联系管理员添加 subject_client_tax_id 和 client_org_id 字段)`);
-            else { alert('贸易记录已入库'); resetForm(); fetchData(); }
+            const { data, error } = await supabase.from('invoices').insert([submitData]).select('id');
+            if (error) { alert(`录入失败: ${error.message}`); return; }
+            if (data && data.length > 0) currentId = data[0].id;
         }
+
+        // 同步系统附件表
+        if (currentId) {
+            await supabase.from('system_attachments').delete().eq('relate_id', currentId);
+            if (formData.cloud_attachments.length > 0) {
+                const atts = formData.cloud_attachments.map(att => ({
+                    file_url: att.file_url,
+                    file_name: att.file_name,
+                    relate_module: 'invoices',
+                    relate_id: currentId,
+                    uploader_id: currentUser?.id || null
+                }));
+                await supabase.from('system_attachments').insert(atts);
+            }
+        }
+
+        alert(editingId ? '业务记录已更新' : '贸易记录已入库'); 
+        resetForm(); 
+        fetchData();
     };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -803,11 +860,58 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                                                 );
                                             })()}
                                             
-                                            <div className="text-[10px] text-slate-500 mt-1 mb-1 leading-relaxed bg-white border border-slate-100 p-1.5 rounded-lg shadow-sm">
-                                                📦 <span className="font-semibold text-slate-600">商品与物料:</span> {r.product_info || '---'}
-                                            </div>
+                                            {(() => {
+                                                const linkedProd = r.product_id ? products.find(p => p.id === r.product_id) : null;
+                                                return (
+                                                    <div className="text-[10px] text-slate-500 mt-1 mb-1 leading-relaxed bg-white border border-slate-100 p-1.5 rounded-lg shadow-sm flex items-start gap-2 relative group/prod">
+                                                        {linkedProd && linkedProd.image_url ? (
+                                                            <div className="w-8 h-8 rounded-md bg-slate-100 border border-slate-200 overflow-hidden flex-shrink-0 cursor-pointer hover:ring-2 ring-emerald-200 transition-all" title="查看商品大图" onClick={() => window.open(linkedProd.image_url, '_blank')}>
+                                                                <img src={linkedProd.image_url} alt={linkedProd.name} className="w-full h-full object-cover" />
+                                                            </div>
+                                                        ) : (
+                                                            <div className="text-sm mt-0.5">📦</div>
+                                                        )}
+                                                        <div className="flex flex-col flex-1 justify-center">
+                                                            <div><span className="font-semibold text-slate-600">商品与物料:</span> {r.product_info || '---'}</div>
+                                                            {linkedProd && (
+                                                                <div className="text-[9px] mt-0.5 text-emerald-600 font-bold flex gap-1">
+                                                                    <span className="bg-emerald-50 px-1 rounded">{linkedProd.category}</span>
+                                                                    {linkedProd.origin && <span className="bg-emerald-50 px-1 rounded">{linkedProd.origin}</span>}
+                                                                    {linkedProd.grade && <span className="bg-emerald-50 px-1 rounded">{linkedProd.grade}</span>}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
                                             
-                                            {r.notes && <div className="text-[10px] text-amber-600/90 mt-0.5 px-1 py-0.5 w-full flex items-start gap-1 bg-amber-50/50 rounded filter drop-shadow-sm">📝 备注: {r.notes}</div>}
+                                            {(() => {
+                                                const rawNotes = r.notes || '';
+                                                const imgMatch = rawNotes.match(/\[IMG:(data:image\/[^\]]+)\]/);
+                                                const cleanNotes = rawNotes.replace(/\[IMG:.*?\]/, '').trim();
+                                                const cloudAtts = attachmentsMap[r.id] || [];
+                                                
+                                                return (
+                                                    <>
+                                                        {cleanNotes && <div className="text-[10px] text-amber-600/90 mt-0.5 px-1 py-0.5 w-full flex items-start gap-1 bg-amber-50/50 rounded filter drop-shadow-sm">📝 备注: {cleanNotes}</div>}
+                                                        {imgMatch && (
+                                                            <div className="mt-1 flex items-center gap-1.5">
+                                                                <span className="text-[10px] text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded shadow-sm font-bold flex items-center gap-1">📷 历史影像凭证</span>
+                                                                <button onClick={() => window.open(imgMatch[1], '_blank')} className="text-[10px] text-indigo-500 hover:text-indigo-700 underline font-medium">查看大图</button>
+                                                            </div>
+                                                        )}
+                                                        {cloudAtts.length > 0 && (
+                                                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                                                {cloudAtts.map((att, i) => (
+                                                                    <button key={att.id || i} onClick={() => window.open(att.file_url, '_blank')} className="text-[10px] text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 px-2 py-0.5 rounded shadow-sm font-bold flex items-center gap-1 transition-colors">
+                                                                        ☁️ 云端附件 {i+1}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </>
+                                                );
+                                            })()}
                                             
                                             {canEdit && (
                                             <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1016,7 +1120,42 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                             </div>
 
                             <div className="space-y-3">
-                                <input className="w-full border border-slate-200 p-3.5 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="商品信息描述" value={formData.product_info} onChange={e => setFormData({ ...formData, product_info: e.target.value })} />
+                                <div className="space-y-1">
+                                    <label className="text-[9px] font-bold text-slate-400 ml-1 uppercase">关联农产品商品库</label>
+                                    <div className="flex gap-2">
+                                        <select 
+                                            className="w-1/2 border border-slate-200 p-3.5 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none transition-all bg-white"
+                                            value={formData.product_id || ''}
+                                            onChange={e => {
+                                                const pid = e.target.value;
+                                                if (!pid) {
+                                                    setFormData({ ...formData, product_id: null });
+                                                } else {
+                                                    const prod = products.find(p => p.id === pid);
+                                                    if (prod) {
+                                                        setFormData({ 
+                                                            ...formData, 
+                                                            product_id: pid, 
+                                                            product_info: prod.name,
+                                                            unit_price: prod.standard_price || formData.unit_price
+                                                        });
+                                                    }
+                                                }
+                                            }}
+                                        >
+                                            <option value="">-- 不关联，纯手工输入 --</option>
+                                            {products.map(p => (
+                                                <option key={p.id} value={p.id}>{p.category} | {p.name}</option>
+                                            ))}
+                                        </select>
+                                        <input 
+                                            className="w-1/2 border border-slate-200 p-3.5 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all" 
+                                            placeholder="商品补充信息描述" 
+                                            value={formData.product_info} 
+                                            onChange={e => setFormData({ ...formData, product_info: e.target.value })} 
+                                        />
+                                    </div>
+                                </div>
                                 
                                 <div className="grid grid-cols-2 gap-3">
                                     <div className="space-y-1">
@@ -1059,7 +1198,76 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                                 </div>
                             </div>
 
-                            <textarea className="w-full border border-slate-200 p-3.5 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all resize-none" placeholder="补充此笔贸易的详细备注信息 (选填)..." value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })} rows={3}></textarea>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="flex flex-col">
+                                    <div className="flex justify-between items-center mb-1 ml-1">
+                                        <label className="block text-[10px] text-slate-400 font-bold">业务单据/影像凭证 (云端直连)</label>
+                                        <button type="button" onClick={(e) => {
+                                            e.preventDefault();
+                                            const url = window.prompt('请粘贴来自【影像资产中心】的公网链接 (URL):');
+                                            if (url && url.trim()) {
+                                                try {
+                                                    new URL(url);
+                                                    const parts = url.split('/');
+                                                    let fileName = parts[parts.length - 1];
+                                                    if (!fileName || fileName.length < 3) fileName = `关联资产_${Date.now()}`;
+                                                    setFormData(prev => ({ ...prev, cloud_attachments: [...prev.cloud_attachments, { file_name: fileName, file_url: url }] }));
+                                                } catch {
+                                                    alert('粘贴的链接格式不正确！');
+                                                }
+                                            }
+                                        }} className="text-[10px] text-indigo-500 font-bold hover:text-indigo-700 hover:underline transition-colors">🔗 粘贴已有图床链接</button>
+                                    </div>
+                                    <label className={`w-full flex items-center justify-center border-2 border-dashed ${isUploadingFile ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200 hover:bg-slate-50'} p-3.5 rounded-xl text-sm cursor-pointer transition-all text-slate-500 font-bold`}>
+                                        {isUploadingFile ? '🚀 正在飞速上传云端...' : '📤 点击上传附件至云端'}
+                                        <input type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" className="hidden" disabled={isUploadingFile} onChange={async (e) => {
+                                            const files = e.target.files;
+                                            if (!files || files.length === 0) return;
+                                            setIsUploadingFile(true);
+                                            try {
+                                                const newAtts: any[] = [];
+                                                for (let i = 0; i < files.length; i++) {
+                                                    const file = files[i];
+                                                    const ext = file.name.split('.').pop();
+                                                    const uniqueName = `inv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
+                                                    const { error } = await supabase.storage.from('trade-proofs').upload(uniqueName, file);
+                                                    if (error) {
+                                                        alert(`文件 ${file.name} 上传失败: ${error.message}`);
+                                                    } else {
+                                                        const { data: urlData } = supabase.storage.from('trade-proofs').getPublicUrl(uniqueName);
+                                                        newAtts.push({ file_name: file.name, file_url: urlData.publicUrl });
+                                                    }
+                                                }
+                                                setFormData(prev => ({ ...prev, cloud_attachments: [...prev.cloud_attachments, ...newAtts] }));
+                                            } finally {
+                                                setIsUploadingFile(false);
+                                                if (e.target) e.target.value = '';
+                                            }
+                                        }} />
+                                    </label>
+                                    {formData.cloud_attachments.length > 0 && (
+                                        <div className="mt-2 flex flex-col gap-1.5 max-h-32 overflow-y-auto pr-1 scrollbar-thin">
+                                            {formData.cloud_attachments.map((att, idx) => (
+                                                <div key={idx} className="flex justify-between items-center bg-slate-50 p-2 rounded border border-slate-100">
+                                                    <span className="text-xs text-slate-600 font-medium truncate max-w-[200px]" title={att.file_name}>
+                                                        ☁️ {att.file_name || '已上传附件'}
+                                                    </span>
+                                                    <div className="flex gap-2">
+                                                        <a href={att.file_url} target="_blank" rel="noreferrer" className="text-[10px] text-indigo-500 hover:underline">查看</a>
+                                                        <button onClick={() => {
+                                                            setFormData(prev => ({ ...prev, cloud_attachments: prev.cloud_attachments.filter((_, i) => i !== idx) }));
+                                                        }} className="text-[10px] text-rose-500 hover:underline">移除</button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex flex-col h-full">
+                                    <label className="block text-[10px] text-slate-400 font-bold mb-1 ml-1">业务备注</label>
+                                    <textarea className="w-full flex-1 border border-slate-200 p-3.5 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all resize-none" placeholder="补充此笔贸易的详细备注信息 (选填)..." value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })}></textarea>
+                                </div>
+                            </div>
 
                             <div className="pt-4 pb-2">
                                 <button onClick={addRecord} className={`w-full py-4 text-white font-black rounded-xl shadow-xl transition-all flex items-center justify-center gap-2 ${editingId ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'}`}>

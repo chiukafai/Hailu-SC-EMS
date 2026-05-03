@@ -35,7 +35,7 @@ export default function ContractManager({
   permissionLevel?: string;
   currentUser?: { username: string; role: string };
 }) {
-  const canEdit = permissionLevel === 'edit';
+  const canEdit = permissionLevel === 'edit' || permissionLevel === 'admin';
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [totalCount, setTotalCount] = useState(0);       // 【新增】服务端返回的总数
   const [loading, setLoading] = useState(false);

@@ -36,15 +36,77 @@ echarts.registerMap('china', chinaGeoJson as any);
 // ========== 地理预索引（一次性构建，O(1) 查找） ==========
 interface MarketInfo { province: string; city: string; coordinates: [number, number]; }
 let _geoIndex: Map<string, MarketInfo> | null = null;
+// 保存完整市场名列表，用于 contains 兜底匹配
+let _fullMarketKeys: string[] = [];
 function getGeoIndex(): Map<string, MarketInfo> {
     if (!_geoIndex) {
         _geoIndex = new Map();
+        _fullMarketKeys = Object.keys(marketCoords);
         for (const [key, val] of Object.entries(marketCoords)) {
-            _geoIndex.set(key.trim(), val);
-            _geoIndex.set(key.trim().replace(/[省市区县市场]$/g, ''), val);
+            const trimmed = key.trim();
+            // 1. 完整市场名 → 精确匹配
+            _geoIndex.set(trimmed, val);
+            // 2. 去掉末尾省市区县市场 → 模糊匹配
+            _geoIndex.set(trimmed.replace(/[省市区县市场]$/g, ''), val);
+            // 3. 城市名（如 "深圳", "广州"）→ 反向映射到该市场
+            //    仅当该城市名尚未被其他市场占用时才写入（避免同城多市场冲突时丢失）
+            if (val.city && !_geoIndex.has(val.city)) {
+                _geoIndex.set(val.city, val);
+            }
         }
     }
     return _geoIndex;
+}
+
+/** 兜底：在完整市场名列表中搜索「包含关系」 */
+function fallbackGeoMatch(loc: string): MarketInfo | undefined {
+    const trimmed = loc.trim();
+    // 情况A: trade_location 是市场名的子串 (如 "深圳" 包含在 "深圳海吉星农产品批发市场" 中)
+    for (const key of _fullMarketKeys) {
+        if (key.includes(trimmed)) {
+            return (marketCoords as Record<string, MarketInfo>)[key];
+        }
+    }
+    // 情况B: trade_location 包含市场名 (如 "广州江南市场XXX" 包含 "广州江南")
+    for (const key of _fullMarketKeys) {
+        if (trimmed.includes(key.substring(0, Math.min(4, key.length)))) {
+            return (marketCoords as Record<string, MarketInfo>)[key];
+        }
+    }
+    return undefined;
+}
+
+// ========== 短名 → 全称 解析（用于下拉框展示和筛选匹配） ==========
+let _nameToFullMap: Map<string, string> | null = null;
+function getNameToFullMap(): Map<string, string> {
+    if (!_nameToFullMap) {
+        _nameToFullMap = new Map();
+        for (const [fullName, val] of Object.entries(marketCoords)) {
+            const trimmed = fullName.trim();
+            // 完整名映射到自身
+            _nameToFullMap.set(trimmed, trimmed);
+            // 城市名映射到完整市场名（优先第一个匹配）
+            if (val.city && !_nameToFullMap.has(val.city)) {
+                _nameToFullMap.set(val.city, trimmed);
+            }
+        }
+    }
+    return _nameToFullMap;
+}
+
+/** 将任意 trade_location（可能是短名如"深圳"）解析为完整市场名 */
+function resolveFullMarketName(loc: string): string {
+    const trimmed = loc.trim();
+    const map = getNameToFullMap();
+    // 1. 精确查找（完整名或城市名）
+    const direct = map.get(trimmed);
+    if (direct) return direct;
+    // 2. 子串包含兜底
+    for (const key of _fullMarketKeys) {
+        if (key.includes(trimmed)) return key;
+    }
+    // 3. 无法解析，返回原名
+    return trimmed;
 }
 
 // ========== 单次遍历聚合引擎 ==========
@@ -67,7 +129,7 @@ function computeStats(
     const marketMap = new Map<string, MapDataItem & { products: Map<string, number>; recordCount: number }>();
 
     for (const r of records) {
-        if (fMarket && r.trade_location?.trim() !== fMarket) continue;
+        if (fMarket && resolveFullMarketName(r.trade_location?.trim() || '') !== fMarket) continue;
         if (fProduct && r.product_info?.trim() !== fProduct) continue;
         if (fDateFrom && (r.trade_date ?? '') < fDateFrom) continue;
         if (fDateTo && (r.trade_date ?? '') > fDateTo) continue;
@@ -101,10 +163,10 @@ function computeStats(
         const cName = r.organizations?.name || '未知单元';
         companyMap.set(cName, (companyMap.get(cName) || 0) + rev);
 
-        // 地图（O(1) 索引查找）
+        // 地图（O(1) 索引查找 + 兜底 contains 匹配）
         const rawLoc = r.trade_location?.trim();
         if (rawLoc) {
-            let info = geoIdx.get(rawLoc) || geoIdx.get(normalize(rawLoc));
+            let info = geoIdx.get(rawLoc) || geoIdx.get(normalize(rawLoc)) || fallbackGeoMatch(rawLoc);
             if (info) {
                 matchedCount++;
                 const mKey = info.city + '-' + info.province;
@@ -160,15 +222,52 @@ export default function GroupDashboard() {
     const [filterDateFrom, setFilterDateFrom] = useState('');
     const [filterDateTo, setFilterDateTo] = useState('');
 
-    // ── 派生选项（从原始数据提取） ──
+    // ── 级联筛选：每个下拉选项根据「其他」已激活筛选条件动态过滤 ──
+    const filteredForMarketOptions = useMemo(() =>
+        rawRecords.filter(r => {
+            if (filterProduct && r.product_info?.trim() !== filterProduct) return false;
+            if (filterDateFrom && (r.trade_date ?? '') < filterDateFrom) return false;
+            if (filterDateTo && (r.trade_date ?? '') > filterDateTo) return false;
+            return true;
+        }),
+        [rawRecords, filterProduct, filterDateFrom, filterDateTo]
+    );
+
+    const filteredForProductOptions = useMemo(() =>
+        rawRecords.filter(r => {
+            if (filterMarket && resolveFullMarketName(r.trade_location?.trim() || '') !== filterMarket) return false;
+            if (filterDateFrom && (r.trade_date ?? '') < filterDateFrom) return false;
+            if (filterDateTo && (r.trade_date ?? '') > filterDateTo) return false;
+            return true;
+        }),
+        [rawRecords, filterMarket, filterDateFrom, filterDateTo]
+    );
+
+    // 市场下拉选项：将短名解析为全称，去重后排序
     const marketOptions = useMemo(() =>
-        [...new Set(rawRecords.map(r => r.trade_location?.trim()).filter(Boolean))].sort(),
-        [rawRecords]
+        [...new Set(filteredForMarketOptions.map(r => {
+            const loc = r.trade_location?.trim();
+            return loc ? resolveFullMarketName(loc) : '';
+        }).filter(Boolean))].sort(),
+        [filteredForMarketOptions]
     );
     const productOptions = useMemo(() =>
-        [...new Set(rawRecords.map(r => r.product_info?.trim()).filter(Boolean))].sort(),
-        [rawRecords]
+        [...new Set(filteredForProductOptions.map(r => r.product_info?.trim()).filter(Boolean))].sort(),
+        [filteredForProductOptions]
     );
+
+    // 当筛选条件变化导致当前选中值不在可用选项中时，自动清除
+    useEffect(() => {
+        if (filterMarket && marketOptions.length > 0 && !marketOptions.includes(filterMarket)) {
+            setFilterMarket('');
+        }
+    }, [marketOptions, filterMarket]);
+
+    useEffect(() => {
+        if (filterProduct && productOptions.length > 0 && !productOptions.includes(filterProduct)) {
+            setFilterProduct('');
+        }
+    }, [productOptions, filterProduct]);
 
     // ── 核心统计（单次遍历，O(n) 而非原来的 6×O(n)） ──
     const stats = useMemo(() =>

@@ -8,7 +8,7 @@ interface StaffMember {
 }
 
 export default function DepartmentManager({ permissionLevel = 'edit' }: { permissionLevel?: string }) {
-    const canEdit = permissionLevel === 'edit';
+    const canEdit = permissionLevel === 'edit' || permissionLevel === 'admin';
     const [depts, setDepts] = useState<any[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [editingId, setEditingId] = useState<string | null>(null);

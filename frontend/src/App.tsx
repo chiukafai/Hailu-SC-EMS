@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import GroupDashboard from './features/dashboard/GroupDashboard';
 import OrgManager from './features/organizations/OrgManager';
 import ClientManager from './features/clients/ClientManager';
+import ProductManager from './features/products/ProductManager';
 import InvoiceManager from './features/invoices/InvoiceManager';
 import DepartmentManager from './features/departments/DepartmentManager';
 import FinancialManager from './features/financial/FinancialManager';
 import Login from './features/auth/Login';
-import UserManager from './features/auth/UserManager';
+import SettingsManager from './features/settings/SettingsManager';
 
 const ALL_TABS = [
   { id: 'dash', label: '集团仪表盘' },
@@ -62,7 +63,7 @@ export default function App() {
     ? ALL_TABS 
     : ALL_TABS.filter(t => !!perms[t.id] || (Array.isArray(currentUser.permissions) && currentUser.permissions.includes(t.id)));
 
-  const getPerm = (id: string) => currentUser.role === 'admin' ? 'edit' : (perms[id] || 'none');
+  const getPerm = (id: string) => currentUser.role === 'admin' ? 'admin' : (perms[id] || 'none');
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -109,7 +110,7 @@ export default function App() {
         {activeTab === 'client' && <ClientManager currentUser={currentUser} permissionLevel={getPerm('client')} />}
         {activeTab === 'invoices' && <InvoiceManager permissionLevel={getPerm('invoices')} currentUser={currentUser} />}
         {activeTab === 'financial' && <FinancialManager permissionLevel={getPerm('financial')} currentUser={currentUser} />}
-        {activeTab === 'users' && currentUser.role === 'admin' && <UserManager currentUser={currentUser} />}
+        {activeTab === 'users' && currentUser.role === 'admin' && <SettingsManager currentUser={currentUser} />}
 
         {/* User has no permissions fallback */}
         {visibleTabs.length === 0 && currentUser.role !== 'admin' && activeTab === '' && (
