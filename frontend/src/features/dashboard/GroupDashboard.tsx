@@ -109,21 +109,24 @@ function resolveFullMarketName(loc: string): string {
     return trimmed;
 }
 
-// ========== 单次遍历聚合引擎 ==========
 function computeStats(
     records: DashboardRecord[],
     fMarket: string | undefined,
     fProduct: string | undefined,
     fDateFrom: string | undefined,
-    fDateTo: string | undefined
+    fDateTo: string | undefined,
+    pClientId?: string
 ): DashboardStats & {
     marketDetailMap: Map<string, MapDataItem & { products: Map<string, number>; recordCount: number }>;
+    myStats: { revenue: number; orderCount: number; productCount: number };
 } {
     const geoIdx = getGeoIndex();
     const normalize = (s: string) => s.trim().replace(/[省市区县市场]$/g, '');
 
     // 所有聚合在一次遍历中完成
     let totalRev = 0, invoicedAmt = 0, settledAmt = 0, matchedCount = 0, totalCnt = 0;
+    let myRev = 0, myOrders = 0;
+    const myProducts = new Set<string>();
     const productMap = new Map<string, TopProductItem & { count: number }>();
     const companyMap = new Map<string, number>();
     const marketMap = new Map<string, MapDataItem & { products: Map<string, number>; recordCount: number }>();
@@ -141,6 +144,12 @@ function computeStats(
         if (r.invoice_status === '已开票') invoicedAmt += rev;
         if (r.transaction_status === '已走流水') settledAmt += rev;
 
+        // 客商自身数据统计
+        if (pClientId && (r.client_tax_id === pClientId || r.subject_client_tax_id === pClientId)) {
+            myRev += rev;
+            myOrders++;
+            if (r.product_info) myProducts.add(r.product_info.trim());
+        }
         // 商品
         const pName = r.product_info?.trim() || '未分类';
         const price = Number(r.unit_price) || 0;
@@ -208,11 +217,12 @@ function computeStats(
         topCompanies,
         diagnostic: { totalRecords: totalCnt, matchedRecords: matchedCount },
         marketDetailMap: marketMap,
+        myStats: { revenue: myRev, orderCount: myOrders, productCount: myProducts.size }
     };
 }
 
 // ========== 组件 ==========
-export default function GroupDashboard() {
+export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
     const [rawRecords, setRawRecords] = useState<DashboardRecord[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -275,8 +285,9 @@ export default function GroupDashboard() {
             filterMarket || undefined,
             filterProduct || undefined,
             filterDateFrom || undefined,
-            filterDateTo || undefined),
-        [rawRecords, filterMarket, filterProduct, filterDateFrom, filterDateTo]
+            filterDateTo || undefined,
+            currentUser?.client_id),
+        [rawRecords, filterMarket, filterProduct, filterDateFrom, filterDateTo, currentUser]
     );
 
     // 预构建市场产品明细 Map（用于 tooltip 快速查找）
@@ -285,14 +296,19 @@ export default function GroupDashboard() {
     const fetchGlobalStats = useCallback(async () => {
         setLoading(true);
         try {
-            // 【核心优化】添加日期范围限制，防止全表扫描
-            // 默认只取最近 3 年数据
-            const result = await fetchDashboardRecords();
+            // 【核心优化】根据角色权限自动切换数据抓取范围
+            const result = await fetchDashboardRecords(
+                undefined, 
+                undefined, 
+                currentUser?.role !== 'admin' ? currentUser?.department_id : undefined,
+                currentUser?.client_id,
+                currentUser?.role !== 'admin' ? currentUser?.org_id : undefined
+            );
 
             if (result.error) {
                 console.error("Dashboard Fetch Error:", result.error.message);
-                // fallback：尝试不带日期限制的查询
-                const fb = await fetchDashboardRecords(undefined, undefined);
+                // fallback：尝试最基本的查询
+                const fb = await fetchDashboardRecords(undefined, undefined, currentUser?.department_id, currentUser?.client_id);
                 if (fb.error) console.error("Fallback also failed:", fb.error.message);
                 else setRawRecords(fb.records);
             } else {
@@ -475,15 +491,61 @@ export default function GroupDashboard() {
                 </div>
             </div>
 
+            {/* 客商专属突出展示 */}
+            {currentUser?.role === 'client' && (
+                <div className="mb-10 bg-gradient-to-r from-slate-900 to-indigo-950 rounded-[2.5rem] p-8 shadow-2xl relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+                    <div className="absolute bottom-0 left-0 w-48 h-48 bg-blue-500/10 rounded-full blur-2xl translate-y-1/2 -translate-x-1/2"></div>
+                    
+                    <div className="relative z-10 grid grid-cols-1 lg:grid-cols-3 gap-8 items-center">
+                        <div className="lg:col-span-1">
+                            <h3 className="text-indigo-400 text-xs font-black uppercase tracking-[0.2em] mb-2">My Business Dashboard</h3>
+                            <h4 className="text-3xl font-black text-white leading-tight">我方交易中心<br/><span className="text-slate-400 text-lg font-bold">与海露控股的协同概览</span></h4>
+                            <div className="mt-6 flex gap-4">
+                                <div className="bg-white/10 backdrop-blur-md px-4 py-2 rounded-xl border border-white/5">
+                                    <span className="block text-[10px] text-slate-400 font-bold uppercase">交易单数</span>
+                                    <span className="text-xl font-black text-white">{stats.myStats.orderCount} <small className="text-xs text-slate-500">笔</small></span>
+                                </div>
+                                <div className="bg-white/10 backdrop-blur-md px-4 py-2 rounded-xl border border-white/5">
+                                    <span className="block text-[10px] text-slate-400 font-bold uppercase">合作品类</span>
+                                    <span className="text-xl font-black text-white">{stats.myStats.productCount} <small className="text-xs text-slate-500">种</small></span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="bg-white/[0.03] hover:bg-white/[0.07] transition-colors p-6 rounded-3xl border border-white/10 flex flex-col justify-between h-40">
+                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">我方累计交易总额</span>
+                                <div>
+                                    <span className="text-4xl font-black text-indigo-400 font-mono">¥ {stats.myStats.revenue.toLocaleString()}</span>
+                                    <p className="text-[10px] text-slate-500 mt-2">※ 实时汇总当前所有订单数据</p>
+                                </div>
+                            </div>
+                            <div className="bg-white/[0.03] hover:bg-white/[0.07] transition-colors p-6 rounded-3xl border border-white/10 flex flex-col justify-between h-40">
+                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">营收占比 / 贡献度</span>
+                                <div>
+                                    <span className="text-4xl font-black text-emerald-400 font-mono">
+                                        {stats.totalRevenue > 0 ? ((stats.myStats.revenue / stats.totalRevenue) * 100).toFixed(2) : 0}%
+                                    </span>
+                                    <div className="w-full h-1 bg-white/10 rounded-full mt-3 overflow-hidden">
+                                        <div className="h-full bg-emerald-500" style={{ width: `${stats.totalRevenue > 0 ? (stats.myStats.revenue / stats.totalRevenue) * 100 : 0}%` }}></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* 核心指标卡片 */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
+            <div className={`grid grid-cols-1 ${currentUser?.role === 'client' ? 'md:grid-cols-4' : 'md:grid-cols-4'} gap-6 mb-10`}>
                 <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">累计营业收入</p>
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{currentUser?.role === 'client' ? '全集团累计营收 (市场大盘)' : '累计营业收入'}</p>
                     <p className="text-2xl font-black text-slate-900 mt-2">¥{stats.totalRevenue.toLocaleString()}</p>
                 </div>
                 <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">已确认开票</p>
-                    <p className="text-2xl font-black text-blue-600 mt-2">¥{stats.invoicedAmount.toLocaleString()}</p>
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{currentUser?.role === 'client' ? '我方已确权金额' : '已确认开票'}</p>
+                    <p className="text-2xl font-black text-blue-600 mt-2">¥{(currentUser?.role === 'client' ? stats.myStats.revenue : stats.invoicedAmount).toLocaleString()}</p>
                 </div>
                 <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                     <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">资金结清占比</p>
@@ -594,45 +656,47 @@ export default function GroupDashboard() {
                     </div>
                 </div>
 
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-                    <div className="p-5 border-b border-slate-50 flex justify-between items-center">
-                        <h3 className="font-bold text-slate-800 text-sm">公司营收排行</h3>
-                        <span className="text-xs text-slate-400">{stats.topCompanies.length} 个公司</span>
-                    </div>
-                    <div className="p-5">
-                        {stats.topCompanies.length === 0 ? (
-                            <p className="text-center text-slate-400 text-sm py-8">暂无数据</p>
-                        ) : (
-                            <div className="space-y-3">
-                                {stats.topCompanies.map((item, i) => {
-                                    const pct = stats.totalRevenue > 0 ? (item.amount / stats.totalRevenue) * 100 : 0;
-                                    const rankColors = ['text-amber-500', 'text-slate-400', 'text-amber-600'];
-                                    return (
-                                        <div key={item.name}>
-                                            <div className="flex justify-between items-center mb-1">
-                                                <div className="flex items-center gap-2 min-w-0">
-                                                    <span className={`text-xs font-black w-5 shrink-0 ${i < 3 ? rankColors[i] : 'text-slate-300'}`}>{i + 1}</span>
-                                                    <span className="text-sm font-medium text-slate-700 truncate">{item.name}</span>
+                {currentUser?.role !== 'client' && (
+                    <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+                        <div className="p-5 border-b border-slate-50 flex justify-between items-center">
+                            <h3 className="font-bold text-slate-800 text-sm">公司营收排行</h3>
+                            <span className="text-xs text-slate-400">{stats.topCompanies.length} 个公司</span>
+                        </div>
+                        <div className="p-5">
+                            {stats.topCompanies.length === 0 ? (
+                                <p className="text-center text-slate-400 text-sm py-8">暂无数据</p>
+                            ) : (
+                                <div className="space-y-3">
+                                    {stats.topCompanies.map((item, i) => {
+                                        const pct = stats.totalRevenue > 0 ? (item.amount / stats.totalRevenue) * 100 : 0;
+                                        const rankColors = ['text-emerald-500', 'text-slate-400', 'text-amber-600'];
+                                        return (
+                                            <div key={item.name}>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <span className={`text-xs font-black w-5 shrink-0 ${i < 3 ? rankColors[i] : 'text-slate-300'}`}>{i + 1}</span>
+                                                        <span className="text-sm font-medium text-slate-700 truncate">{item.name}</span>
+                                                    </div>
+                                                    <span className="text-sm font-black text-slate-800 ml-3 shrink-0 font-mono">
+                                                        ¥{item.amount.toLocaleString()}
+                                                    </span>
                                                 </div>
-                                                <span className="text-sm font-black text-slate-800 ml-3 shrink-0 font-mono">
-                                                    ¥{item.amount.toLocaleString()}
-                                                </span>
+                                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                    <div className="h-full rounded-full transition-all duration-700"
+                                                        style={{
+                                                            width: `${pct}%`,
+                                                            backgroundColor: i === 0 ? '#10b981' : i === 1 ? '#14b8a6' : i === 2 ? '#06b6d4' : '#94a3b8'
+                                                        }}
+                                                    />
+                                                </div>
                                             </div>
-                                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                                                <div className="h-full rounded-full transition-all duration-700"
-                                                    style={{
-                                                        width: `${pct}%`,
-                                                        backgroundColor: i === 0 ? '#10b981' : i === 1 ? '#14b8a6' : i === 2 ? '#06b6d4' : '#94a3b8'
-                                                    }}
-                                                />
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
                     </div>
-                </div>
+                )}
             </div>
         </div>
     );

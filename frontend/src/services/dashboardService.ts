@@ -12,6 +12,8 @@ export interface DashboardRecord {
   transaction_status: string | null;
   trade_location: string | null;
   org_id?: string | null;
+  client_tax_id?: string | null;
+  subject_client_tax_id?: string | null;
   organizations?: { name: string } | null;
 }
 
@@ -73,12 +75,26 @@ export function getRevenue(r: DashboardRecord): number {
  */
 export async function fetchDashboardRecords(
   dateFrom?: string,
-  dateTo?: string
+  dateTo?: string,
+  departmentId?: string,
+  clientId?: string,
+  orgId?: string
 ): Promise<{ records: DashboardRecord[]; error: Error | null }> {
   let query = supabase
     .from('invoices')
     .select('*, organizations!invoices_org_id_fkey(name)')
     .order('trade_date', { ascending: false });
+
+  // 1. 权限隔离过滤
+  if (departmentId) {
+    query = query.or(`department_id.eq.${departmentId},invoice_handler_dept_id.eq.${departmentId},cashier_handler_dept_id.eq.${departmentId}`);
+  } else if (orgId) {
+    query = query.eq('org_id', orgId);
+  }
+
+  if (clientId) {
+    query = query.or(`client_tax_id.eq.${clientId},subject_client_tax_id.eq.${clientId}`);
+  }
 
   // 默认限制：只查最近 3 年的数据（防止全表扫描）
   if (!dateFrom) {

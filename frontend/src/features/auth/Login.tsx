@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../../api/supabase';
+import { logAudit } from '../../utils/auditLogger';
 
 export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
     const [username, setUsername] = useState('');
@@ -23,6 +24,9 @@ export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
         if (fetchError || !data) {
             setError('账号验证失败，可能密码错误或账号被系统冻结。');
         } else {
+            // 写入审计日志
+            await logAudit(data.id, 'LOGIN', '系统登录', `用户 [${data.name}] 登录了系统`);
+            
             onLogin(data);
         }
     };

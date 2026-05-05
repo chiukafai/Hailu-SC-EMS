@@ -2,9 +2,10 @@ import { useState } from 'react';
 import UserManager from '../auth/UserManager';
 import AssetManager from './AssetManager';
 import ProductManager from '../products/ProductManager';
+import LogManager from './LogManager';
 
 export default function SettingsManager({ currentUser }: { currentUser: any }) {
-    const [subTab, setSubTab] = useState<'users' | 'assets' | 'products'>('users');
+    const [subTab, setSubTab] = useState<'users' | 'assets' | 'products' | 'logs'>('users');
 
     return (
         <div className="animate-fade-in">
@@ -15,7 +16,7 @@ export default function SettingsManager({ currentUser }: { currentUser: any }) {
                         onClick={() => setSubTab('users')}
                         className={`px-6 py-2 rounded-xl text-sm font-black transition-all ${subTab === 'users' ? 'bg-purple-600 text-white shadow-md shadow-purple-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
-                        🔐 权限账户中枢
+                        🔐 系统防御阵列监视
                     </button>
                     <button 
                         onClick={() => setSubTab('assets')}
@@ -29,6 +30,12 @@ export default function SettingsManager({ currentUser }: { currentUser: any }) {
                     >
                         📦 农产品商品库
                     </button>
+                    <button 
+                        onClick={() => setSubTab('logs')}
+                        className={`px-6 py-2 rounded-xl text-sm font-black transition-all ${subTab === 'logs' ? 'bg-rose-600 text-white shadow-md shadow-rose-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+                    >
+                        📜 中枢节点审计
+                    </button>
                 </div>
             </div>
 
@@ -36,6 +43,7 @@ export default function SettingsManager({ currentUser }: { currentUser: any }) {
                 {subTab === 'users' && <UserManager currentUser={currentUser} />}
                 {subTab === 'assets' && <AssetManager />}
                 {subTab === 'products' && <ProductManager permissionLevel="admin" />}
+                {subTab === 'logs' && <LogManager />}
             </div>
         </div>
     );

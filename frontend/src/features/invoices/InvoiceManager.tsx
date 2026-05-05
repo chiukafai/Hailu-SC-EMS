@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../../api/supabase';
 import * as XLSX from 'xlsx';
 
-export default function InvoiceManager({ permissionLevel = 'edit', currentUser }: { permissionLevel?: string, currentUser?: any }) {
+export default function InvoiceManager({ permissionLevel = 'edit', currentUser, onOpenChat }: { permissionLevel?: string, currentUser?: any, onOpenChat?: (id: string) => void }) {
     const canEdit = permissionLevel === 'edit' || permissionLevel === 'admin';
     const [records, setRecords] = useState<any[]>([]);
     const [orgs, setOrgs] = useState<any[]>([]);
@@ -113,12 +113,23 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         // Fix: Explicitly specify the FK relation to resolve ambiguity since we now have multiple FKs to organizations
         let query = supabase.from('invoices').select('*, organizations!invoices_org_id_fkey(name)', { count: 'exact' });
         
-        if (permissionLevel === 'head' || permissionLevel === 'edit') {
+        // 权限隔离过滤
+        if (currentUser?.role !== 'admin' && currentUser?.role !== 'client') {
             if (currentUser?.department_id) {
+                // 情况 A: 账号关联了具体内设部门
                 query = query.or(`department_id.eq.${currentUser.department_id},invoice_handler_dept_id.eq.${currentUser.department_id},cashier_handler_dept_id.eq.${currentUser.department_id}`);
-            } else if (currentUser?.id) {
+            } else if (currentUser?.org_id) {
+                // 情况 B: 账号关联了子公司主体 (实现跨部门透视)
+                // 只要该子公司的 ID 出现在所属组织或往来组织中，均可见
+                query = query.or(`org_id.eq.${currentUser.org_id},client_org_id.eq.${currentUser.org_id}`);
+            } else {
+                // 情况 C: 独立账号
                 query = query.eq('created_by', currentUser.id);
             }
+        }
+        
+        if (currentUser?.role === 'client' && currentUser?.client_id) {
+            query = query.or(`client_tax_id.eq.${currentUser.client_id},subject_client_tax_id.eq.${currentUser.client_id}`);
         }
 
         if (filters.product_info) query = query.ilike('product_info', `%${filters.product_info}%`);
@@ -156,12 +167,17 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         if (p) setProducts(p);
 
         try {
+            // 关键修复：如果是客商，强制只统计该客商的数据
+            const statsClientFilter = (currentUser?.role === 'client' && currentUser?.client_id) 
+                ? [currentUser.client_id] 
+                : matchedClientTaxIds;
+
             const { data: stats, error: rpcError } = await supabase.rpc('get_invoice_stats', {
                 p_dept_id: (permissionLevel === 'head' || permissionLevel === 'edit') ? (currentUser?.department_id || null) : null,
                 p_user_id: (permissionLevel === 'head' || permissionLevel === 'edit') && !currentUser?.department_id ? (currentUser?.id || null) : null,
                 p_product: filters.product_info || null,
                 p_org_name: filters.org_name || null,
-                p_client_tax_ids: matchedClientTaxIds,
+                p_client_tax_ids: statsClientFilter,
                 p_location: filters.trade_location || null,
                 p_invoice_status: filters.invoice_status || null,
                 p_transaction_status: filters.transaction_status || null,
@@ -179,7 +195,8 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                 });
             }
         } catch (e: any) {
-            console.error("RPC Error (Requires SQL execution):", e);
+            console.error("RPC Error:", e);
+            // 降级逻辑：从已过滤的 records 中计算（虽然只有当前页，但在没有 RPC 时作为临时显示）
             if (r) {
                 setAggregatedStats({
                     totalRevenue: r.reduce((sum:any, item:any) => sum + Number(item.amount), 0),
@@ -362,13 +379,12 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         const dataToExport = scope === 'page' ? records : records.filter(r => selectedIds.has(r.id));
         const exportData = dataToExport.map(r => {
             const { subject, client } = getRecordEntities(r);
-            return {
+            const baseData: any = {
                 '项目名称': r.project_name,
-                '业务归属部门': allDepartments.find(d => d.id === r.department_id)?.name || '',
                 '交易主体': subject.name,
-                '主体类型': subject.type === 'org' ? '集团' : '客商',
-                '客户名称': client.name,
-                '客户类型': client.type === 'org' ? '集团' : '客商',
+                '主体类型': subject.type === 'org' ? '集团内部' : '外部客商',
+                '往来客户': client.name,
+                '客商类型': client.type === 'org' ? '集团内部' : '外部客商',
                 '商品信息': r.product_info,
                 '发生日期': r.trade_date,
                 '交易地点': r.trade_location,
@@ -376,15 +392,21 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                 '数量': r.quantity,
                 '单价': r.unit_price,
                 '发票状态': r.invoice_status === 'invoiced' ? '已开票' : '待开票',
-                '开票完成日期': r.invoice_completed_date || '',
                 '资金流水状态': r.transaction_status === 'completed' ? '已结清' : '待确认',
-                '流水完成日期': r.transaction_completed_date || '',
-                '已核销金额': tradeLinks[r.id] || 0,
-                '核销率': `${Math.min(100, Math.round(((tradeLinks[r.id] || 0) / (r.amount || 1)) * 100))}%`,
-                '业务归属部门ID': r.department_id,
                 '备注': r.notes,
-                '创建时间': r.created_at
             };
+
+            // Only include internal management info for employees
+            if (currentUser?.role !== 'client') {
+                baseData['业务归属部门'] = allDepartments.find(d => d.id === r.department_id)?.name || '';
+                baseData['开票完成日期'] = r.invoice_completed_date || '';
+                baseData['流水完成日期'] = r.transaction_completed_date || '';
+                baseData['已核销金额'] = tradeLinks[r.id] || 0;
+                baseData['核销率'] = `${Math.min(100, Math.round(((tradeLinks[r.id] || 0) / (r.amount || 1)) * 100))}%`;
+                baseData['创建时间'] = r.created_at;
+            }
+
+            return baseData;
         });
         const ws = XLSX.utils.json_to_sheet(exportData);
         const wb = XLSX.utils.book_new();
@@ -723,27 +745,39 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                         </button>
                     </div>
 
-                    <div>
-                        <label className="block text-[10px] font-bold text-slate-400 mb-1">筛选归属部门</label>
-                        <select className="w-full border p-2 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none transition-all" value={searchFilters.department_id} onChange={e => setSearchFilters({ ...searchFilters, department_id: e.target.value })}>
-                            <option value="">全部部门</option>
-                            {allDepartments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                        </select>
-                    </div>
+                    {currentUser?.role !== 'client' && (
+                        <div>
+                            <label className="block text-[10px] font-bold text-slate-400 mb-1">筛选归属部门</label>
+                            <select className="w-full border p-2 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none transition-all" value={searchFilters.department_id} onChange={e => setSearchFilters({ ...searchFilters, department_id: e.target.value })}>
+                                <option value="">全部部门</option>
+                                {allDepartments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                            </select>
+                        </div>
+                    )}
                 
                     <div>
                         <label className="block text-[10px] font-bold text-slate-400 mb-1">商品信息检索</label>
                         <input className="w-full border p-2 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none transition-all" placeholder="模糊匹配" value={searchFilters.product_info} onChange={e => setSearchFilters({ ...searchFilters, product_info: e.target.value })} />
                     </div>
                     
-                    <div>
-                        <label className="block text-[10px] font-bold text-slate-400 mb-1">主体公司搜索</label>
-                        <input className="w-full border p-2 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none transition-all" placeholder="模糊匹配" value={searchFilters.org_name} onChange={e => setSearchFilters({ ...searchFilters, org_name: e.target.value })} />
-                    </div>
+                    {currentUser?.role !== 'client' && (
+                        <div>
+                            <label className="block text-[10px] font-bold text-slate-400 mb-1">主体公司搜索</label>
+                            <input className="w-full border p-2 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none transition-all" placeholder="模糊匹配" value={searchFilters.org_name} onChange={e => setSearchFilters({ ...searchFilters, org_name: e.target.value })} />
+                        </div>
+                    )}
 
                     <div>
-                        <label className="block text-[10px] font-bold text-slate-400 mb-1">往来客户</label>
-                        <input className="w-full border p-2 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none transition-all" placeholder="模糊匹配" value={searchFilters.client_name} onChange={e => setSearchFilters({ ...searchFilters, client_name: e.target.value })} />
+                        <label className="block text-[10px] font-bold text-slate-400 mb-1">{currentUser?.role === 'client' ? '交易对手 (往来方)' : '往来客户'}</label>
+                        <input className="w-full border p-2 rounded-lg text-sm bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none transition-all" placeholder="模糊匹配" 
+                            value={currentUser?.role === 'client' ? searchFilters.org_name : searchFilters.client_name} 
+                            onChange={e => {
+                                if (currentUser?.role === 'client') {
+                                    setSearchFilters({ ...searchFilters, org_name: e.target.value });
+                                } else {
+                                    setSearchFilters({ ...searchFilters, client_name: e.target.value });
+                                }
+                            }} />
                     </div>
 
                     <div>
@@ -828,89 +862,100 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                                         }} />
                                     </td>
                                     <td className="py-4 align-top">
-                                        <div className="flex flex-col gap-1.5 pt-1">
-                                            <div className="text-sm font-black text-slate-800 break-words max-w-[180px] leading-tight filter drop-shadow-sm">
-                                                {r.project_name || '未命名项目'}
+                                        <div className="flex items-start gap-3">
+                                            {/* Product Image and Date Container (Left) */}
+                                            <div className="flex flex-col items-center gap-1.5 w-14 flex-shrink-0">
+                                                {(() => {
+                                                    const linkedProd = r.product_id ? products.find(p => p.id === r.product_id) : null;
+                                                    return linkedProd && linkedProd.image_url ? (
+                                                        <div className="w-12 h-12 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden cursor-pointer hover:ring-2 ring-emerald-200 transition-all shadow-sm flex-shrink-0" title="查看商品大图" onClick={() => window.open(linkedProd.image_url, '_blank')}>
+                                                            <img src={linkedProd.image_url} alt={linkedProd.name} className="w-full h-full object-cover" />
+                                                        </div>
+                                                    ) : (
+                                                        <div className="w-12 h-12 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center text-xl text-slate-300 flex-shrink-0">📦</div>
+                                                    );
+                                                })()}
+                                                {r.trade_date && <div className="text-[9px] text-slate-400 font-bold tracking-tighter whitespace-nowrap">{r.trade_date}</div>}
                                             </div>
-                                            <div className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded shadow-sm w-max font-bold mt-1">
-                                                🏭 {allDepartments.find(d => d.id === r.department_id)?.name || '未划归部门'}
-                                            </div>
-                                            {(r.trade_date || r.trade_location) && (
-                                                <div className="text-[10px] text-slate-400 mt-1 flex flex-col gap-1">
-                                                    {r.trade_date && <span className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 w-max">📅 {r.trade_date}</span>}
-                                                    {r.trade_location && <span className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100 w-max">📍 {r.trade_location}</span>}
+                                            
+                                            {/* Project Name and Department (Right) */}
+                                            <div className="flex flex-col gap-1 pt-0.5">
+                                                <div className="text-sm font-black text-slate-800 break-words max-w-[150px] leading-tight filter drop-shadow-sm">
+                                                    {r.project_name || '未命名项目'}
                                                 </div>
-                                            )}
+                                                {currentUser?.role !== 'client' && (
+                                                    <div className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded shadow-sm w-max font-bold">
+                                                        🏭 {allDepartments.find(d => d.id === r.department_id)?.name || '未划归部门'}
+                                                    </div>
+                                                )}
+                                                {r.trade_location && <div className="text-[9px] text-slate-400 font-medium">📍 {r.trade_location}</div>}
+                                            </div>
                                         </div>
                                     </td>
                                     <td className="py-4 align-top">
-                                        <div className="flex flex-col gap-1 rounded-xl p-2 bg-slate-50 border border-slate-100/50 group-hover:bg-white transition-colors relative">
+                                        <div className="flex flex-col gap-1.5 rounded-xl p-2 bg-slate-50/50 border border-transparent group-hover:bg-white group-hover:border-slate-100 transition-colors relative">
                                             {(() => {
                                                 const { subject, client } = getRecordEntities(r);
+                                                const isUserSubject = currentUser?.role === 'client' && currentUser?.client_id === r.subject_client_tax_id;
+                                                const isUserClient = currentUser?.role === 'client' && currentUser?.client_id === r.client_tax_id;
+                                                
                                                 return (
-                                                    <div className="flex flex-col gap-1 mb-1">
-                                                        <div className={`text-[11px] font-black leading-tight flex items-center gap-1.5 ${subject.type === 'org' ? 'text-indigo-700' : 'text-amber-700'}`}>
-                                                            {subject.type === 'org' ? '🏢 [集团] ' : '👥 [客商] '} 主体: {subject.name}
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`text-[11px] font-black leading-tight flex items-center gap-1 ${subject.type === 'org' ? 'text-indigo-700' : 'text-amber-700'}`}>
+                                                            {subject.type === 'org' ? '🏢' : '👥'} {subject.name}
+                                                            {isUserSubject && <span className="ml-1 text-[8px] bg-amber-100 text-amber-700 px-1 rounded">我方供货</span>}
                                                         </div>
-                                                        
-                                                        <div className={`text-[11px] font-bold border-l-2 pl-1.5 mt-0.5 flex items-center gap-1.5 ${client.type === 'org' ? 'text-indigo-600 border-indigo-200' : 'text-slate-600 border-slate-200'}`}>
-                                                            {client.type === 'org' ? '🏢 [集团] ' : '🤝 '} 客户: {client.name}
+                                                        <span className="text-slate-300 text-[10px]">▶</span>
+                                                        <div className={`text-[11px] font-bold flex items-center gap-1 ${client.type === 'org' ? 'text-indigo-600' : 'text-slate-600'}`}>
+                                                            {client.type === 'org' ? '🏢' : '🤝'} {client.name}
+                                                            {isUserClient && <span className="ml-1 text-[8px] bg-blue-100 text-blue-700 px-1 rounded">我方采购</span>}
                                                         </div>
                                                     </div>
                                                 );
                                             })()}
                                             
-                                            {(() => {
-                                                const linkedProd = r.product_id ? products.find(p => p.id === r.product_id) : null;
-                                                return (
-                                                    <div className="text-[10px] text-slate-500 mt-1 mb-1 leading-relaxed bg-white border border-slate-100 p-1.5 rounded-lg shadow-sm flex items-start gap-2 relative group/prod">
-                                                        {linkedProd && linkedProd.image_url ? (
-                                                            <div className="w-8 h-8 rounded-md bg-slate-100 border border-slate-200 overflow-hidden flex-shrink-0 cursor-pointer hover:ring-2 ring-emerald-200 transition-all" title="查看商品大图" onClick={() => window.open(linkedProd.image_url, '_blank')}>
-                                                                <img src={linkedProd.image_url} alt={linkedProd.name} className="w-full h-full object-cover" />
-                                                            </div>
-                                                        ) : (
-                                                            <div className="text-sm mt-0.5">📦</div>
-                                                        )}
-                                                        <div className="flex flex-col flex-1 justify-center">
-                                                            <div><span className="font-semibold text-slate-600">商品与物料:</span> {r.product_info || '---'}</div>
+                                            <div className="flex items-center flex-wrap gap-2 text-[10px]">
+                                                {(() => {
+                                                    const linkedProd = r.product_id ? products.find(p => p.id === r.product_id) : null;
+                                                    return (
+                                                        <div className="text-slate-500 font-medium flex items-center gap-1 bg-white border border-slate-100 px-1.5 py-0.5 rounded shadow-sm">
+                                                            <span className="text-slate-700 font-bold max-w-[120px] truncate">{r.product_info || '未知商品'}</span>
                                                             {linkedProd && (
-                                                                <div className="text-[9px] mt-0.5 text-emerald-600 font-bold flex gap-1">
-                                                                    <span className="bg-emerald-50 px-1 rounded">{linkedProd.category}</span>
-                                                                    {linkedProd.origin && <span className="bg-emerald-50 px-1 rounded">{linkedProd.origin}</span>}
-                                                                    {linkedProd.grade && <span className="bg-emerald-50 px-1 rounded">{linkedProd.grade}</span>}
-                                                                </div>
+                                                                <span className="text-emerald-600 ml-0.5 font-bold">({linkedProd.category}{linkedProd.origin ? `·${linkedProd.origin}` : ''})</span>
                                                             )}
                                                         </div>
-                                                    </div>
-                                                );
-                                            })()}
+                                                    );
+                                                })()}
+                                                
+                                                {(() => {
+                                                    const rawNotes = r.notes || '';
+                                                    const imgMatch = rawNotes.match(/\[IMG:(data:image\/[^\]]+)\]/);
+                                                    const cloudAtts = attachmentsMap[r.id] || [];
+                                                    const hasAttachments = imgMatch || cloudAtts.length > 0;
+                                                    
+                                                    if (hasAttachments) {
+                                                        return (
+                                                            <div className="flex items-center gap-1">
+                                                                {imgMatch && (
+                                                                    <button onClick={() => window.open(imgMatch[1], '_blank')} className="text-indigo-500 hover:scale-110 transition-transform cursor-pointer" title="查看本地凭证图片">🔗</button>
+                                                                )}
+                                                                {cloudAtts.map((att, i) => (
+                                                                    <button key={att.id || i} onClick={() => window.open(att.file_url, '_blank')} className="text-blue-500 hover:scale-110 transition-transform cursor-pointer" title="查看云端附件">🔗</button>
+                                                                ))}
+                                                            </div>
+                                                        );
+                                                    }
+                                                    return null;
+                                                })()}
+                                            </div>
                                             
                                             {(() => {
                                                 const rawNotes = r.notes || '';
-                                                const imgMatch = rawNotes.match(/\[IMG:(data:image\/[^\]]+)\]/);
                                                 const cleanNotes = rawNotes.replace(/\[IMG:.*?\]/, '').trim();
-                                                const cloudAtts = attachmentsMap[r.id] || [];
-                                                
-                                                return (
-                                                    <>
-                                                        {cleanNotes && <div className="text-[10px] text-amber-600/90 mt-0.5 px-1 py-0.5 w-full flex items-start gap-1 bg-amber-50/50 rounded filter drop-shadow-sm">📝 备注: {cleanNotes}</div>}
-                                                        {imgMatch && (
-                                                            <div className="mt-1 flex items-center gap-1.5">
-                                                                <span className="text-[10px] text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded shadow-sm font-bold flex items-center gap-1">📷 历史影像凭证</span>
-                                                                <button onClick={() => window.open(imgMatch[1], '_blank')} className="text-[10px] text-indigo-500 hover:text-indigo-700 underline font-medium">查看大图</button>
-                                                            </div>
-                                                        )}
-                                                        {cloudAtts.length > 0 && (
-                                                            <div className="mt-1.5 flex flex-wrap gap-1.5">
-                                                                {cloudAtts.map((att, i) => (
-                                                                    <button key={att.id || i} onClick={() => window.open(att.file_url, '_blank')} className="text-[10px] text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 px-2 py-0.5 rounded shadow-sm font-bold flex items-center gap-1 transition-colors">
-                                                                        ☁️ 云端附件 {i+1}
-                                                                    </button>
-                                                                ))}
-                                                            </div>
-                                                        )}
-                                                    </>
-                                                );
+                                                if (cleanNotes) {
+                                                    return <div className="text-[10px] text-amber-600/90 leading-tight truncate max-w-[200px]" title={cleanNotes}>📝 {cleanNotes}</div>;
+                                                }
+                                                return null;
                                             })()}
                                             
                                             {canEdit && (
@@ -975,6 +1020,8 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                                                     ✅ 业务全满结案
                                                 </span>
                                             )}
+
+
                                         </div>
                                     </td>
                                 </tr>

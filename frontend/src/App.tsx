@@ -8,6 +8,7 @@ import DepartmentManager from './features/departments/DepartmentManager';
 import FinancialManager from './features/financial/FinancialManager';
 import Login from './features/auth/Login';
 import SettingsManager from './features/settings/SettingsManager';
+import ChatOverlay from './features/chat/ChatOverlay';
 
 const ALL_TABS = [
   { id: 'dash', label: '集团仪表盘' },
@@ -21,6 +22,10 @@ const ALL_TABS = [
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('dash');
+  
+  // Chat States
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatContext, setChatContext] = useState<{ tradeId?: string | null; receiverId?: string | null }>({});
 
   useEffect(() => {
     const saved = localStorage.getItem('hailu_ems_session');
@@ -95,30 +100,60 @@ export default function App() {
           </div>
           <div className="flex items-center gap-4">
             <div className="hidden md:flex flex-col text-right">
-              <span className="text-xs font-bold text-slate-700">{currentUser.username} <span className="text-slate-400 font-normal">{currentUser.role==='admin'?'(超级管理员)':'(专员)'}</span></span>
+              <span className="text-xs font-bold text-slate-700">{currentUser.username} <span className="text-slate-400 font-normal">{currentUser.role==='admin'?'(超级管理员)':currentUser.role==='client'?'(外部客商)':'(内部员工)'}</span></span>
               <span className="text-[9px] font-mono text-emerald-500 uppercase tracking-widest">Network Secure</span>
             </div>
+            <button 
+              onClick={() => {
+                setChatContext({});
+                setIsChatOpen(true);
+              }}
+              className="relative p-2 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all group"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
+              </svg>
+              <span className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 border-2 border-white rounded-full"></span>
+            </button>
             <button onClick={handleLogout} className="text-xs bg-slate-100 text-slate-500 font-bold px-3 py-1.5 rounded-lg hover:bg-slate-200 hover:text-slate-800 transition-colors">安全登出</button>
           </div>
         </div>
       </nav>
 
     <main className="pb-8">
-      {activeTab === 'dash' && <GroupDashboard />}
+      {activeTab === 'dash' && <GroupDashboard currentUser={currentUser} />}
         {activeTab === 'org' && <OrgManager permissionLevel={getPerm('org')} />}
         {activeTab === 'dept' && <DepartmentManager permissionLevel={getPerm('dept')} />}
         {activeTab === 'client' && <ClientManager currentUser={currentUser} permissionLevel={getPerm('client')} />}
-        {activeTab === 'invoices' && <InvoiceManager permissionLevel={getPerm('invoices')} currentUser={currentUser} />}
+        {activeTab === 'invoices' && (
+          <InvoiceManager 
+            permissionLevel={getPerm('invoices')} 
+            currentUser={currentUser} 
+            onOpenChat={(tradeId: string) => {
+              setChatContext({ tradeId });
+              setIsChatOpen(true);
+            }} 
+          />
+        )}
         {activeTab === 'financial' && <FinancialManager permissionLevel={getPerm('financial')} currentUser={currentUser} />}
         {activeTab === 'users' && currentUser.role === 'admin' && <SettingsManager currentUser={currentUser} />}
 
-        {/* User has no permissions fallback */}
         {visibleTabs.length === 0 && currentUser.role !== 'admin' && activeTab === '' && (
           <div className="flex items-center justify-center p-20 text-slate-400 font-bold">
             您当前尚未被授予任何模块的访问权限，请联系管理员分配。
           </div>
         )}
       </main>
+
+      {/* Global Chat Overlay */}
+      {isChatOpen && (
+        <ChatOverlay 
+          currentUser={currentUser}
+          tradeId={chatContext.tradeId}
+          receiverId={chatContext.receiverId}
+          onClose={() => setIsChatOpen(false)}
+        />
+      )}
     </div>
   );
 }
