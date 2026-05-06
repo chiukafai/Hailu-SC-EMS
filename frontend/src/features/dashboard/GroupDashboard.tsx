@@ -117,7 +117,7 @@ function computeStats(
     fDateTo: string | undefined,
     pClientId?: string
 ): DashboardStats & {
-    marketDetailMap: Map<string, MapDataItem & { products: Map<string, number>; recordCount: number }>;
+    marketDetailMap: Map<string, { name: string; value: number; city: string; province: string; coords: [number, number]; products: Map<string, number>; recordCount: number }>;
     myStats: { revenue: number; orderCount: number; productCount: number };
 } {
     const geoIdx = getGeoIndex();
@@ -129,7 +129,7 @@ function computeStats(
     const myProducts = new Set<string>();
     const productMap = new Map<string, TopProductItem & { count: number }>();
     const companyMap = new Map<string, number>();
-    const marketMap = new Map<string, MapDataItem & { products: Map<string, number>; recordCount: number }>();
+    const marketMap = new Map<string, { name: string; value: number; city: string; province: string; coords: [number, number]; products: Map<string, number>; recordCount: number }>();
 
     for (const r of records) {
         if (fMarket && resolveFullMarketName(r.trade_location?.trim() || '') !== fMarket) continue;
@@ -182,11 +182,12 @@ function computeStats(
                 let mEnt = marketMap.get(mKey);
                 if (!mEnt) {
                     mEnt = { name: rawLoc, value: 0, city: info.city, province: info.province,
-                             coords: info.coordinates, products: new Map(), recordCount: 0 };
+                             coords: info.coordinates, products: new Map<string, number>(), recordCount: 0 };
                     marketMap.set(mKey, mEnt);
                 }
-                mEnt.value += rev; mEnt.recordCount++;
-                mEnt.products.set(pName, (mEnt.products.get(pName) || 0) + rev);
+                const entry = mEnt!;
+                entry.value += rev; entry.recordCount++;
+                entry.products.set(pName, (entry.products.get(pName) || 0) + rev);
             }
         }
     }
@@ -203,7 +204,7 @@ function computeStats(
 
     const mapData: MapDataItem[] = [...marketMap].map(([, v]) => ({
         name: v.name, value: v.value, city: v.city, province: v.province, coords: v.coords,
-        products: [...v.products.entries()].sort((a, b) => b[1] - a[1])
+        products: [...v.products.entries()].sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
             .slice(0, 5).map(([n, a]) => ({ name: n, amount: a })),
     }));
 
@@ -328,7 +329,6 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
     };
 
     const hasActiveFilter = !!filterMarket || !!filterProduct || !!filterDateFrom || !!filterDateTo;
-    const refresh = () => { fetchGlobalStats(); };
 
     // ── ECharts 配置（保持原有 UI 不变） ──
     const mapOption = useMemo(() => ({
@@ -347,12 +347,12 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                 const mEntry = marketProductMap.get(loc);
                 const total = params.value[2] || 0;
                 const recCount = mEntry?.recordCount || 0;
-                const prods = mEntry?.products || [];
+                const prods = [...(mEntry?.products || new Map<string, number>()).entries()] as [string, number][];
 
                 let productHtml = '';
                 if (prods.length > 1) {
                     productHtml = '<div class="mt-2 pt-2 border-t border-slate-100">' +
-                        prods.map(([p, v]: [string, number]) =>
+                        prods.map(([p, v]) =>
                             `<div class="flex justify-between text-xs gap-4 py-0.5"><span class="text-slate-500 truncate max-w-[120px]">${p}</span><span class="font-mono font-bold text-slate-700">¥${v.toLocaleString()}</span></div>`
                         ).join('') +
                         (prods.length > 5 ? `<div class="text-xs text-slate-400 mt-1">+${prods.length - 5} 个商品</div>` : '') +

@@ -69,9 +69,20 @@ export default function DepartmentManager({ permissionLevel = 'edit' }: { permis
         };
 
         if (editingId) {
-            const { error } = await supabase.from('departments').update(submitData).eq('id', editingId);
-            if (error) alert(error.message);
-            else {
+            // Update primary record with merged staff, then delete all other duplicates
+            const { error: updateError } = await supabase.from('departments').update(submitData).eq('id', editingId);
+            if (updateError) {
+                alert(updateError.message);
+            } else {
+                // Delete all other records with the same department name (dedup)
+                const { data: duplicates } = await supabase
+                    .from('departments')
+                    .select('id')
+                    .eq('name', submitData.name)
+                    .neq('id', editingId);
+                if (duplicates && duplicates.length > 0) {
+                    await supabase.from('departments').delete().in('id', duplicates.map((d: any) => d.id));
+                }
                 alert('部门信息已更新');
                 resetForm();
                 fetchDepts();
@@ -115,15 +126,38 @@ export default function DepartmentManager({ permissionLevel = 'edit' }: { permis
         }
     };
 
-    const startEdit = (dept: any) => {
-        setEditingId(dept.id);
-        setFormData({
-            name: dept.name,
-            head: dept.head || '',
-            head_post: dept.head_post || '',
-            head_phone: dept.head_phone || '',
-            staff_members: parseStaff(dept)
+    const startEdit = async (dept: any) => {
+        // Fetch ALL records with the same department name for merge-edit
+        const { data: allDepts } = await supabase
+            .from('departments')
+            .select('*')
+            .eq('name', dept.name)
+            .order('created_at');
+
+        if (!allDepts || allDepts.length === 0) return;
+
+        // Merge staff from all records of the same name
+        const mergedStaff: StaffMember[] = [];
+        allDepts.forEach(d => {
+            const members = parseStaff(d);
+            members.forEach(m => {
+                if (m.name && !mergedStaff.some(existing => existing.name === m.name)) {
+                    mergedStaff.push(m);
+                }
+            });
         });
+
+        const primary = allDepts[0];
+        setEditingId(primary.id);
+        setFormData({
+            name: primary.name,
+            head: primary.head || '',
+            head_post: primary.head_post || '',
+            head_phone: primary.head_phone || '',
+            staff_members: mergedStaff.length > 0 ? mergedStaff : [{ name: '', post: '', phone: '' }]
+        });
+        // Refresh depts so right panel shows the same merged data
+        fetchDepts();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
@@ -181,20 +215,25 @@ export default function DepartmentManager({ permissionLevel = 'edit' }: { permis
         d.name?.includes(searchTerm) || d.head?.includes(searchTerm) || d.staff?.includes(searchTerm)
     );
 
-    // Dynamic Database Deduplication Grouping
+    // Dynamic Database Deduplication Grouping (dedup by staff name)
     const groupedDepts = Object.values(filteredDepts.reduce((acc: any, dept: any) => {
         if (!acc[dept.name]) {
             acc[dept.name] = { ...dept, rawIds: [dept.id] };
         } else {
             acc[dept.name].rawIds.push(dept.id);
-            const currentStaff = parseStaff(acc[dept.name]);
+            // Deduplicate staff by name (keep first occurrence's post/phone)
             const nextStaff = parseStaff(dept);
-            const combined = [...currentStaff, ...nextStaff].filter(m => m.name);
-            
-            acc[dept.name].staff = combined.map(c => c.name).join(', ');
-            acc[dept.name].staff_post = combined.map(c => c.post).join(', ');
-            acc[dept.name].staff_phone = combined.map(c => c.phone).join(', ');
-            
+            nextStaff.forEach(s => {
+                if (s.name && !acc[dept.name]._staffMap?.has(s.name)) {
+                    if (!acc[dept.name]._staffMap) acc[dept.name]._staffMap = new Map();
+                    acc[dept.name]._staffMap.set(s.name, s);
+                }
+            });
+            const merged = Array.from(acc[dept.name]._staffMap.values()) as StaffMember[];
+            acc[dept.name].staff = merged.map(c => c.name).join(', ');
+            acc[dept.name].staff_post = merged.map(c => c.post).join(', ');
+            acc[dept.name].staff_phone = merged.map(c => c.phone).join(', ');
+
             if (!acc[dept.name].head && dept.head) {
                 acc[dept.name].head = dept.head;
                 acc[dept.name].head_post = dept.head_post;
@@ -279,18 +318,18 @@ export default function DepartmentManager({ permissionLevel = 'edit' }: { permis
                 )}
 
                 {/* 右侧：列表视图 */}
-                <div className={`${canEdit ? 'lg:w-3/5' : 'w-full'} space-y-6`}>
-                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+                <div className={`${canEdit ? 'lg:w-3/5' : 'w-full'} space-y-4`}>
+                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-3">
                         <div className="flex items-center gap-3">
-                            <h2 className="text-xl font-black text-slate-800">部门明细</h2>
-                            <span className="text-[10px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded font-black tracking-widest">{groupedDepts.length} UNITS</span>
+                            <h2 className="text-base font-black text-slate-800">部门总览</h2>
+                            <span className="text-[9px] bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg font-black tracking-widest">{groupedDepts.length} 个部门</span>
                         </div>
                         <div className="flex gap-2 w-full md:w-auto">
                             <div className="relative flex-1 md:flex-none">
                                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">🔍</span>
-                                <input className="border border-slate-200 pl-8 pr-4 py-2.5 rounded-xl text-sm w-full md:w-64 bg-slate-50 focus:bg-white transition-all outline-none focus:ring-2 focus:ring-indigo-100" placeholder="搜索部门 / 人名 / 岗位..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                <input className="border border-slate-200 pl-8 pr-4 py-2 rounded-xl text-xs w-full md:w-56 bg-slate-50 focus:bg-white transition-all outline-none focus:ring-2 focus:ring-indigo-100" placeholder="搜索部门 / 人名..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                             </div>
-                            <button onClick={() => window.print()} className="bg-slate-100 p-2.5 rounded-xl hover:bg-slate-200 transition-colors shadow-sm">🖨️</button>
+                            <button onClick={() => window.print()} className="bg-slate-100 p-2 rounded-xl hover:bg-slate-200 transition-colors shadow-sm text-sm">🖨️</button>
                         </div>
                     </div>
 
@@ -299,78 +338,73 @@ export default function DepartmentManager({ permissionLevel = 'edit' }: { permis
                             const staffMembers = parseStaff(dept).filter(m => m.name);
 
                             return (
-                            <div key={dept.id} className="rounded-[2.5rem] border border-slate-200 bg-white hover:shadow-2xl hover:border-indigo-100 transition-all group overflow-hidden">
+                            <div key={dept.id} className="rounded-3xl border border-slate-200 bg-white hover:shadow-2xl hover:border-indigo-100 transition-all group overflow-hidden">
                                 
-                                <div className="bg-slate-50/50 p-6 border-b border-slate-100 flex justify-between items-center">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-14 h-14 rounded-[1.25rem] bg-indigo-600 text-white flex items-center justify-center font-black text-2xl shadow-xl shadow-indigo-100 rotate-3 group-hover:rotate-0 transition-all duration-500">
-                                            {dept.name.charAt(0)}
-                                        </div>
-                                        <div>
-                                            <h4 className="font-black text-slate-800 text-2xl tracking-tight leading-none mb-1.5">{dept.name}</h4>
-                                            <p className="text-[9px] text-slate-400 uppercase tracking-[0.3em] font-black opacity-60">CORP REGISTRY / {dept.name.toUpperCase()}</p>
-                                        </div>
-                                    </div>
+                                <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center">
                                     {canEdit && (
-                                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity translate-x-4 group-hover:translate-x-0 duration-300">
-                                        <button onClick={() => startEdit(dept)} className="text-xs font-black text-indigo-600 bg-white border border-indigo-100 px-5 py-2.5 rounded-2xl hover:bg-indigo-600 hover:text-white shadow-sm transition-all active:scale-95">编辑构架</button>
-                                        <button onClick={() => handleDelete(dept.rawIds, dept.name)} className="text-xs font-black text-rose-600 bg-white border border-rose-100 px-5 py-2.5 rounded-2xl hover:bg-rose-600 hover:text-white shadow-sm transition-all active:scale-95">撤销建制</button>
+                                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity translate-x-4 group-hover:translate-x-0 duration-300 ml-auto">
+                                        <button onClick={() => startEdit(dept)} className="text-[10px] font-black text-indigo-600 bg-white border border-indigo-100 px-4 py-1.5 rounded-xl hover:bg-indigo-600 hover:text-white shadow-sm transition-all active:scale-95">编辑</button>
+                                        <button onClick={() => handleDelete(dept.rawIds, dept.name)} className="text-[10px] font-black text-rose-600 bg-white border border-rose-100 px-4 py-1.5 rounded-xl hover:bg-rose-600 hover:text-white shadow-sm transition-all active:scale-95">删除</button>
                                     </div>
                                     )}
                                 </div>
 
-                                <div className="p-8 grid grid-cols-1 md:grid-cols-3 gap-10">
-                                    
-                                    <div className="md:col-span-1 border-r border-slate-100 md:pr-10">
-                                        <div className="mb-4 flex items-center gap-2">
+                                <div className="px-6 py-5 flex gap-5 items-start">
+                                    {/* 部门名称 - 蓝底白字，醒目大字 */}
+                                    <div className="flex-shrink-0">
+                                        <div className="bg-indigo-600 text-white px-5 py-4 rounded-2xl text-center shadow-lg flex flex-col items-center gap-1.5 min-w-[110px]">
+                                            <span className="text-[9px] font-black opacity-60 tracking-[0.25em] uppercase">部门</span>
+                                            <span className="font-black text-lg leading-tight tracking-tight">{dept.name}</span>
+                                            <span className="text-[8px] opacity-50 font-black tracking-widest uppercase">{dept.name.toUpperCase().substring(0, 8)}</span>
+                                        </div>
+                                    </div>
+
+                                    {/* 负责人区域 - 紧凑横排 */}
+                                    <div className="flex-1 min-w-0">
+                                        <div className="mb-3 flex items-center gap-2">
                                             <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
-                                            <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">负责人 / Management</h5>
+                                            <h5 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">负责人</h5>
                                         </div>
-                                        <div className="bg-gradient-to-br from-amber-50 to-orange-50/30 p-6 rounded-[2rem] border border-amber-100/50 relative shadow-inner overflow-hidden">
-                                            <div className="absolute -right-6 -top-6 text-7xl opacity-5 pointer-events-none rotate-12 group-hover:rotate-0 transition-transform duration-700">👑</div>
-                                            <p className="text-xl font-black text-slate-800 mb-0.5">{dept.head || '暂无指派'}</p>
-                                            <span className="inline-block text-[10px] text-amber-700 font-black uppercase tracking-wider mb-4 bg-amber-200/50 px-2.5 py-1 rounded-lg">
-                                                {dept.head_post || '行政专员'}
-                                            </span>
-                                            <div className="pt-3 border-t border-amber-200/40 flex items-center gap-3">
-                                                <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center text-xs shadow-sm">📱</div>
-                                                <span className="text-xs text-amber-900/60 font-mono font-black tracking-tight">{dept.head_phone || '未记录通讯'}</span>
+                                        <div className="bg-gradient-to-br from-amber-50 to-orange-50/30 px-5 py-4 rounded-2xl border border-amber-100/50 shadow-inner flex items-center gap-5 flex-wrap">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center text-sm shadow-sm border border-amber-100">👤</div>
+                                                <div>
+                                                    <p className="text-base font-black text-slate-800 leading-tight">{dept.head || '暂无指派'}</p>
+                                                    <span className="text-[11px] text-amber-700 font-black">{dept.head_post || '行政专员'}</span>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2 pl-4 border-l border-amber-200/40">
+                                                <span className="text-xs">📱</span>
+                                                <span className="text-[13px] text-amber-900/60 font-mono font-black">{dept.head_phone || '未记录'}</span>
                                             </div>
                                         </div>
                                     </div>
-
-                                    <div className="md:col-span-2">
-                                        <div className="mb-4 flex items-center gap-2">
-                                            <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>
-                                            <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">经办人 / Handlers roster</h5>
-                                        </div>
-                                        {staffMembers.length > 0 ? (
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                                {staffMembers.map((sm, idx) => (
-                                                    <div key={idx} className="bg-slate-50/80 p-5 rounded-[1.5rem] border border-slate-100 flex flex-col gap-1.5 hover:bg-white hover:border-emerald-200 hover:shadow-xl transition-all duration-300 relative overflow-hidden group/card scale-100 hover:scale-[1.03]">
-                                                        <div className="flex justify-between items-start relative z-10">
-                                                            <span className="font-black text-slate-800 text-sm tracking-tight">{sm.name}</span>
-                                                            <span className="text-[8px] bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-md font-black uppercase tracking-tighter">
-                                                                {sm.post || '业务员'}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex items-center gap-2 mt-1 relative z-10 opacity-60 group-hover/card:opacity-100 transition-opacity">
-                                                            <span className="text-[10px]">📞</span>
-                                                            <span className="text-[11px] text-slate-500 font-mono font-bold">{sm.phone || '无专线'}</span>
-                                                        </div>
-                                                        <div className="absolute -right-3 -bottom-3 text-5xl opacity-[0.03] group-hover/card:opacity-10 group-hover/card:scale-125 transition-all duration-500">💼</div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        ) : (
-                                            <div className="h-full w-full min-h-[140px] border-2 border-dashed border-slate-100 rounded-[2.5rem] flex flex-col items-center justify-center text-[10px] font-black text-slate-300 uppercase tracking-widest gap-3 opacity-50">
-                                                <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center text-xl">📁</div>
-                                                目前该部门尚未分配经办人编制
-                                            </div>
-                                        )}
-                                    </div>
-
                                 </div>
+
+                                {/* 经办人区域 */}
+                                {(staffMembers.length > 0 || canEdit) && (
+                                <div className="px-6 pb-5">
+                                    <div className="mb-3 flex items-center gap-2 border-t border-slate-100 pt-4">
+                                        <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>
+                                        <h5 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">经办人 {staffMembers.length > 0 ? `(${staffMembers.length}人)` : ''}</h5>
+                                    </div>
+                                    {staffMembers.length > 0 ? (
+                                        <div className="flex flex-wrap gap-3">
+                                            {staffMembers.map((sm, idx) => (
+                                                <div key={idx} className="bg-slate-50/80 px-4 py-3 rounded-xl border border-slate-100 flex items-center gap-4 hover:bg-white hover:border-emerald-200 hover:shadow-md transition-all duration-300 group/card">
+                                                    <span className="font-black text-slate-800 text-sm">{sm.name}</span>
+                                                    <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-md font-black">
+                                                        {sm.post || '业务员'}
+                                                    </span>
+                                                    <span className="text-[13px] text-slate-400 font-mono font-bold">{sm.phone || '—'}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-[9px] text-slate-300 font-black uppercase tracking-widest italic">尚未分配经办人</div>
+                                    )}
+                                </div>
+                                )}
                             </div>
                         )})}
                     </div>

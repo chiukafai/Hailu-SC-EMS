@@ -7,7 +7,7 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
     const [clients, setClients] = useState<any[]>([]);
     const [allDepartments, setAllDepartments] = useState<any[]>([]);
     const [totalCount, setTotalCount] = useState(0);
-    const [loading, setLoading] = useState(false);
+    const [, setLoading] = useState(false);
     const [searchFilters, setSearchFilters] = useState({ 
         full_name: '', 
         tax_id: '', 
@@ -39,7 +39,7 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
 
     const [formData, setFormData] = useState(initialForm);
 
-    const [fetchError, setFetchError] = useState<string | null>(null);
+    const [, setFetchError] = useState<string | null>(null);
 
     // 【优化】使用服务端分页 + 健壮容错 + 加载状态
     const fetchClients = async () => {

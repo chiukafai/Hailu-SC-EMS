@@ -14,11 +14,13 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [contacts, setContacts] = useState<any[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [deptMembers, setDeptMembers] = useState<any[]>([]);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(initialReceiverId || null);
   const [searchTerm, setSearchTerm] = useState('');
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingContacts, setLoadingContacts] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -115,14 +117,35 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
   };
 
   const fetchData = async () => {
-    const { data: accepted } = await chatService.getAcceptedContacts(currentUser.id);
-    if (accepted) setContacts(accepted);
+    setLoadingContacts(true);
+    
+    try {
+      // 获取已接受联系人
+      const { data: accepted } = await chatService.getAcceptedContacts(currentUser.id);
+      if (accepted) setContacts(accepted);
 
-    const { data: pending } = await chatService.getPendingRequests(currentUser.id);
-    if (pending) setPendingRequests(pending);
+      // 获取待处理请求
+      const { data: pending } = await chatService.getPendingRequests(currentUser.id);
+      if (pending) setPendingRequests(pending);
 
-    const { data: all } = await chatService.getAllUsers();
-    if (all) setAllUsers(all.filter(u => u.id !== currentUser.id));
+      // 获取所有用户（所有人可见）
+      const { data: all } = await chatService.getAllUsers();
+      if (all) {
+        setAllUsers(all.filter(u => u.id !== currentUser.id));
+      }
+
+      // 获取同部门员工
+      if (currentUser.department_id) {
+        const { data: dept } = await chatService.getDepartmentMembers(currentUser.department_id, currentUser.id);
+        if (dept) setDeptMembers(dept);
+      } else {
+        setDeptMembers([]);
+      }
+    } catch (err) {
+      console.error('[Chat] fetchData 异常:', err);
+    } finally {
+      setLoadingContacts(false);
+    }
   };
 
   const handleDeepSearch = async () => {
@@ -206,11 +229,14 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
   };
 
   const filteredContacts = useMemo(() => {
-    const baseList = currentUser.role === 'admin' ? allUsers : contacts;
-    return baseList.filter(u => 
+    // 管理员看到全集团所有用户
+    // 员工也看到所有用户（可以主动发起聊天）
+    const baseList = allUsers.length > 0 ? allUsers : contacts;
+    const result = baseList.filter(u => 
         (u.full_name || u.username || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
-  }, [contacts, allUsers, searchTerm, currentUser.role]);
+    return result;
+  }, [contacts, allUsers, searchTerm]);
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
@@ -260,18 +286,48 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
                     </div>
                 )}
 
+                {deptMembers.length > 0 && (
+                    <div className="space-y-2">
+                        <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">我的部门 ({deptMembers.length})</p>
+                        {deptMembers.map(u => (
+                            <div 
+                                key={u.id}
+                                onClick={() => setSelectedUserId(u.id)}
+                                className={`p-4 rounded-[1.5rem] cursor-pointer transition-all flex items-center gap-4 ${selectedUserId === u.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'hover:bg-white hover:shadow-sm text-slate-600'}`}
+                            >
+                                <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm ${selectedUserId === u.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                    {(u.full_name || u.username || 'U').substring(0, 1).toUpperCase()}
+                                </div>
+                                <div className="flex-1 overflow-hidden">
+                                    <p className="font-bold text-sm truncate">{u.full_name || u.username}</p>
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+                                        <p className={`text-[9px] uppercase tracking-tighter font-black opacity-60 ${selectedUserId === u.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                            部门同事
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 <div className="space-y-1">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-3">
                         {currentUser.role === 'admin' ? '全集团名单' : '我的业务伙伴'}
                     </p>
-                    {filteredContacts.length === 0 ? (
+                    {!loadingContacts && filteredContacts.length === 0 ? (
                         <div className="text-center py-10 px-4">
                             <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl grayscale opacity-20">📇</div>
                             <p className="text-xs text-slate-400 font-bold">暂无往来联系人</p>
-                            <button onClick={() => setIsAddModalOpen(true)} className="text-[10px] text-indigo-600 font-black mt-3 hover:underline">点击查找新客商</button>
+                            {currentUser.role === 'admin' ? (
+                                <p className="text-[9px] text-slate-300 mt-1">请先在「用户管理」中创建账号</p>
+                            ) : (
+                                <button onClick={() => setIsAddModalOpen(true)} className="text-[10px] text-indigo-600 font-black mt-3 hover:underline">点击查找新客商</button>
+                            )}
                         </div>
-                    ) : (
-                        filteredContacts.map(u => (
+                    ) : null}
+                    {!loadingContacts && filteredContacts.map(u => (
                             <div 
                                 key={u.id}
                                 onClick={() => setSelectedUserId(u.id)}
@@ -290,8 +346,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
                                     </div>
                                 </div>
                             </div>
-                        ))
-                    )}
+                        ))}
                 </div>
             </div>
         </div>

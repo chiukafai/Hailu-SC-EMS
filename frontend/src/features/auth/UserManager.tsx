@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../api/supabase';
+import { chatService } from '../../services/chatService';
 
 const ALL_MODULES = [
     { id: 'dash', name: '集团仪表盘' },
@@ -55,6 +56,11 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                 const dept = departments.find(d => d.id === deptId);
                 if (dept) {
                     const autoName = idType === 'head' ? dept.head : (staffName || dept.staff?.split(',')?.[0] || '');
+                    // Warn if this username already exists in the system
+                    const existing = users.find(u => u.username === autoName.trim());
+                    if (existing) {
+                        setTimeout(() => alert(`⚠️ 账号 [${autoName.trim()}] 已存在！请选择"手动录入新身份"换一个登录账号，或编辑现有账号。`), 0);
+                    }
                     nextObj.username = autoName.trim() || '';
                     nextObj.full_name = autoName.trim();
                 }
@@ -82,6 +88,7 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
 
         const submitData: any = { ...formData };
         if (!submitData.department_id) submitData.department_id = null;
+        if (!submitData.org_id) submitData.org_id = null;
         if (!submitData.client_id || submitData.role !== 'client') submitData.client_id = null;
         
         if (submitData.role === 'client') {
@@ -97,9 +104,36 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
             if (error) alert(error.message);
             else { alert('账号凭证更新成功'); setEditingId(null); fetchUsers(); }
         } else {
-            const { error } = await supabase.from('app_users').insert([submitData]);
-            if (error) alert(`建立失败：${error.message}`);
-            else { alert('干员凭证建立成功'); resetForm(); fetchUsers(); }
+            // Prevent duplicate username
+            const { data: existingUser } = await supabase
+                .from('app_users')
+                .select('id, username')
+                .eq('username', formData.username)
+                .single();
+            if (existingUser) {
+                alert(`账号 [${formData.username}] 已被占用，请换一个登录账号再试！`);
+                return;
+            }
+
+            const { data: newUsers, error } = await supabase.from('app_users').insert([submitData]).select('id');
+            if (error) { alert(`建立失败：${error.message}`); return; }
+
+            const newUserId = newUsers?.[0]?.id;
+            if (newUserId && formData.department_id && formData.role !== 'client') {
+                // 自动与同部门所有现有成员建立聊天连接
+                const { data: deptMembers } = await supabase
+                    .from('app_users')
+                    .select('id')
+                    .eq('department_id', formData.department_id)
+                    .neq('id', newUserId);
+                if (deptMembers) {
+                    await Promise.all(deptMembers.map(m => chatService.ensureConnection(newUserId, m.id)));
+                }
+            }
+
+            alert('干员凭证建立成功');
+            resetForm();
+            fetchUsers();
         }
     };
 

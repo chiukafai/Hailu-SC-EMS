@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../../api/supabase';
 import * as XLSX from 'xlsx';
 
-export default function InvoiceManager({ permissionLevel = 'edit', currentUser, onOpenChat }: { permissionLevel?: string, currentUser?: any, onOpenChat?: (id: string) => void }) {
+export default function InvoiceManager({ permissionLevel = 'edit', currentUser }: { permissionLevel?: string, currentUser?: any }) {
     const canEdit = permissionLevel === 'edit' || permissionLevel === 'admin';
     const [records, setRecords] = useState<any[]>([]);
     const [orgs, setOrgs] = useState<any[]>([]);

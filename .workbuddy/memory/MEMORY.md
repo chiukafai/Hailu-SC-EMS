@@ -19,6 +19,17 @@
 | financial/contracts | ContractManager.tsx | ✅ 已完成（需建表） |
 | financial/expenses | ExpenseManager.tsx | ✅ 已完成（需建表） |
 | users | UserManager.tsx | ✅ 已完成（admin only） |
+| chat | ChatOverlay.tsx | ✅ 已完成（B2B贸易聊天中心） |
+| products | ProductManager.tsx | ✅ 已完成（产品SKU资产管理） |
+| settings | SettingsManager.tsx | ✅ 已完成（含 AssetManager、LogManager） |
+
+## GitHub 仓库信息（2026-05-06 同步）
+- **仓库地址**：https://github.com/chiukafai/Hailu-SC-EMS
+- **账号**：chiukafai（593150075@qq.com）
+- **本地路径**：`e:\Kingsley\workbuddy\数据管理系统\Hailu-SC-EMS`
+- **同步命令**：`git pull origin main` 拉取最新，`git add . && git commit -m "msg" && git push` 推送
+- **新增模块（Mac 同步引入）**：ChatOverlay、ProductManager、SettingsManager、useDashboardStats、baseRepository、chatService、dashboardService、dictionaryService、auditLogger
+- **Vite 配置**：已添加 `server.allowedHosts: ['.trycloudflare.com']`（支持 Cloudflare Tunnel 展示）
 
 ## 代码约定
 - 无路由库，Tab 切换由 App.tsx 的 useState 管理
@@ -26,6 +37,7 @@
 - 无 UI 组件库，全部 Tailwind CSS v4 手写
 - 类型定义统一在 `src/types/index.ts` 导出
 - 自定义 hook 放 `src/hooks/`
+- services/ 目录存放业务逻辑层（baseRepository、chatService、dashboardService 等）
 
 ## 重要注意事项
 - Supabase anon key 当前仍硬编码在 `src/api/supabase.ts`（后续可迁移 .env.local）

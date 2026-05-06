@@ -148,6 +148,18 @@ export const chatService = {
     return { data: contacts };
   },
 
+  // 获取同部门员工列表（用于内部通讯）
+  getDepartmentMembers: async (departmentId: string, excludeUserId: string) => {
+    if (!departmentId) return { data: [] };
+    const { data, error } = await supabase
+      .from('app_users')
+      .select('id, full_name, username, role, client_id, department_id')
+      .eq('department_id', departmentId)
+      .neq('id', excludeUserId)
+      .order('full_name', { ascending: true });
+    return { data, error };
+  },
+
   // 深度搜索：通过公司名称、纳税号或姓名查找
   searchGlobalEntities: async (queryStr: string) => {
     // 1. 搜索客户表 (获取纳税号)
@@ -156,14 +168,8 @@ export const chatService = {
       .select('tax_id, full_name')
       .or(`full_name.ilike.%${queryStr}%,tax_id.eq.${queryStr}`);
     
-    // 2. 搜索内部组织表 (获取组织ID)
-    const { data: orgs } = await supabase
-      .from('organizations')
-      .select('id, name')
-      .ilike('name', `%${queryStr}%`);
 
     const clientTaxIds = clients?.map(c => c.tax_id) || [];
-    const orgIds = orgs?.map(o => o.id) || [];
 
     // 3. 构建用户表查询
     // 匹配：姓名、用户名、所属客户ID、或管理员手动填写的备注

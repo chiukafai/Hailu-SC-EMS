@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import GroupDashboard from './features/dashboard/GroupDashboard';
 import OrgManager from './features/organizations/OrgManager';
 import ClientManager from './features/clients/ClientManager';
-import ProductManager from './features/products/ProductManager';
 import InvoiceManager from './features/invoices/InvoiceManager';
 import DepartmentManager from './features/departments/DepartmentManager';
 import FinancialManager from './features/financial/FinancialManager';
@@ -126,13 +125,9 @@ export default function App() {
         {activeTab === 'dept' && <DepartmentManager permissionLevel={getPerm('dept')} />}
         {activeTab === 'client' && <ClientManager currentUser={currentUser} permissionLevel={getPerm('client')} />}
         {activeTab === 'invoices' && (
-          <InvoiceManager 
-            permissionLevel={getPerm('invoices')} 
-            currentUser={currentUser} 
-            onOpenChat={(tradeId: string) => {
-              setChatContext({ tradeId });
-              setIsChatOpen(true);
-            }} 
+          <InvoiceManager
+            permissionLevel={getPerm('invoices')}
+            currentUser={currentUser}
           />
         )}
         {activeTab === 'financial' && <FinancialManager permissionLevel={getPerm('financial')} currentUser={currentUser} />}

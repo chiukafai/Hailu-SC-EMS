@@ -21,7 +21,10 @@ export interface SortOptions {
 
 // ========== 基础 Repository ==========
 export class BaseRepository<T> {
-  constructor(protected table: string) {}
+  protected table: string;
+  constructor(table: string) {
+    this.table = table;
+  }
 
   /**
    * 分页查询（服务端分页）

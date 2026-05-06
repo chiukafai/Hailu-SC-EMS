@@ -7,5 +7,8 @@ export default defineConfig({
   server: {
     host: true,
     allowedHosts: true,
+    headers: {
+      'Content-Security-Policy': "default-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.supabase.co https://mdukduvdzwxfheyqvkfy.supabase.co data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' ws: wss: https://*.supabase.co https://mdukduvdzwxfheyqvkfy.supabase.co;",
+    },
   },
 })

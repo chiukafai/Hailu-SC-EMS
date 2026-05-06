@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   fetchDashboardRecords,
-  fetchAggregatedStats,
   getRevenue,
 } from '../services/dashboardService';
 
@@ -50,7 +49,8 @@ interface AggregationAccumulator {
   settledAmount: number;   // 已走流水
   productMap: Map<string, TopProductItem & { count: number }>;
   companyMap: Map<string, number>;
-  marketMap: Map<string, MapDataItem & { products: Map<string, number>; recordCount: number }>;
+  // 内部用 Map 聚合，导出前转数组格式
+  marketMap: Map<string, { name: string; value: number; city: string; province: string; coords: [number, number]; products: Map<string, number>; recordCount: number }>;
   matchedRecords: number;
   totalRecords: number;
   marketIndex: Map<string, MarketInfo>;
@@ -151,14 +151,14 @@ function aggregateRecords(
             city: targetInfo.city,
             province: targetInfo.province,
             coords: targetInfo.coordinates,
-            products: new Map(),
+            products: new Map<string, number>(),
             recordCount: 0,
           };
           acc.marketMap.set(mKey, mEntry);
         }
         mEntry.value += rev;
         mEntry.recordCount++;
-        mEntry.products.set(pName, (mEntry.products.get(pName) || 0) + rev);
+        mEntry.products.set(pName, (mEntry.products.get(pName) ?? 0) + rev);
       }
     }
   }
@@ -177,10 +177,10 @@ function aggregateRecords(
     .map(([name, amount]) => ({ name, amount }));
 
   const mapData: MapDataItem[] = [...acc.marketMap.values()].map(
-    ({ name, value, city, province, coords, products, recordCount }) => ({
+    ({ name, value, city, province, coords, products }) => ({
       name, value, city, province, coords,
-      products: [...products.entries()].map(([n, a]) => ({ name: n, amount: a }))
-        .sort((a, b) => b.amount - a.amount),
+      products: [...(products as Map<string, number>).entries()].map(([n, a]) => ({ name: n, amount: a }))
+        .sort((a, b) => (b.amount as number) - (a.amount as number)),
     })
   );
 
@@ -251,11 +251,11 @@ export function useDashboardStats(): UseDashboardStatsResult {
 
   // 派生选项
   const marketOptions = useMemo(
-    () => [...new Set(rawRecords.map(r => r.trade_location?.trim()).filter(Boolean))].sort(),
+    () => [...new Set(rawRecords.map(r => r.trade_location?.trim()).filter((v): v is string => !!v))].sort(),
     [rawRecords]
   );
   const productOptions = useMemo(
-    () => [...new Set(rawRecords.map(r => r.product_info?.trim()).filter(Boolean))].sort(),
+    () => [...new Set(rawRecords.map(r => r.product_info?.trim()).filter((v): v is string => !!v))].sort(),
     [rawRecords]
   );
 
