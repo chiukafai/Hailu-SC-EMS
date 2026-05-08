@@ -230,9 +230,6 @@ export default function ContractManager({
   const filteredPartyB = orgOptions.filter(o =>
     o.name.toLowerCase().includes(partyBSearch.toLowerCase())
   );
-  // 已选公司的显示名（用于 input 的只读展示）
-  const partyASelectedName = orgOptions.find(o => o.id === genForm.party_a)?.name || '';
-  const partyBSelectedName = orgOptions.find(o => o.id === genForm.party_b)?.name || '';
 
   // 合同生成表单
   // 注：贸易数据中甲方=卖方（对应 invoices.org_id），乙方=买方（对应 invoices.client_org_id）
@@ -242,6 +239,9 @@ export default function ContractManager({
     date_start: '',
     date_end: '',
   });
+  // 已选公司的显示名（用于 input 的只读展示，genForm 声明后才能引用）
+  const partyASelectedName = orgOptions.find(o => o.id === genForm.party_a)?.name || '';
+  const partyBSelectedName = orgOptions.find(o => o.id === genForm.party_b)?.name || '';
   // 贸易汇总预览
   const [tradePreview, setTradePreview] = useState<{
     totalRaw: number;
