@@ -217,6 +217,23 @@ export default function ContractManager({
 
   // 所有组织列表（甲方/乙方候选）
   const [orgOptions, setOrgOptions] = useState<{ id: string; name: string }[]>([]);
+  // 关键字搜索输入（与已选ID分离）
+  const [partyASearch, setPartyASearch] = useState('');
+  const [partyBSearch, setPartyBSearch] = useState('');
+  // 下拉展开状态
+  const [showPartyADropdown, setShowPartyADropdown] = useState(false);
+  const [showPartyBDropdown, setShowPartyBDropdown] = useState(false);
+  // 关键字匹配过滤
+  const filteredPartyA = orgOptions.filter(o =>
+    o.name.toLowerCase().includes(partyASearch.toLowerCase())
+  );
+  const filteredPartyB = orgOptions.filter(o =>
+    o.name.toLowerCase().includes(partyBSearch.toLowerCase())
+  );
+  // 已选公司的显示名（用于 input 的只读展示）
+  const partyASelectedName = orgOptions.find(o => o.id === genForm.party_a)?.name || '';
+  const partyBSelectedName = orgOptions.find(o => o.id === genForm.party_b)?.name || '';
+
   // 合同生成表单
   // 注：贸易数据中甲方=卖方（对应 invoices.org_id），乙方=买方（对应 invoices.client_org_id）
   const [genForm, setGenForm] = useState({
@@ -241,6 +258,13 @@ export default function ContractManager({
       setOrgOptions((data ?? []).map(o => ({ id: o.id, name: o.name })));
     });
   }, [genModal]);
+
+  // 点击空白处关闭下拉
+  useEffect(() => {
+    const handler = () => { setShowPartyADropdown(false); setShowPartyBDropdown(false); };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, []);
 
   // 取整到最近整千
   const roundToThousand = (n: number) => Math.round(n / 1000) * 1000;
@@ -368,6 +392,10 @@ export default function ContractManager({
       setGenModal(false);
       setTradePreview(null);
       setGenForm({ party_a: '', party_b: '', date_start: '', date_end: '' });
+      setPartyASearch('');
+      setPartyBSearch('');
+      setShowPartyADropdown(false);
+      setShowPartyBDropdown(false);
       fetchContracts();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -417,7 +445,7 @@ export default function ContractManager({
             className="px-4 py-2 text-xs font-bold bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors">
             导出 Excel
           </button>
-          <button onClick={() => { setGenModal(true); setGenError(''); setTradePreview(null); }}
+          <button onClick={() => { setGenModal(true); setGenError(''); setTradePreview(null); setPartyASearch(''); setPartyBSearch(''); setShowPartyADropdown(false); setShowPartyBDropdown(false); }}
             className="px-4 py-2 text-xs font-bold bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 shadow-sm transition-colors flex items-center gap-1.5">
             🗂️ 生成合同
           </button>
@@ -671,31 +699,75 @@ export default function ContractManager({
             <div className="px-7 py-6 space-y-5 overflow-y-auto max-h-[75vh]">
 
               {/* 甲方（卖方）*/}
-              <div>
+              <div className="relative">
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
                   甲方（卖方 / 供应方）<span className="text-rose-400">*</span>
                 </label>
-                <select
+                <input
+                  type="text"
                   className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
-                  value={genForm.party_a}
-                  onChange={e => { setGenForm(p => ({ ...p, party_a: e.target.value })); setTradePreview(null); }}>
-                  <option value="">请选择甲方（集团内部公司）</option>
-                  {orgOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </select>
+                  placeholder="输入关键字搜索甲方..."
+                  value={showPartyADropdown ? partyASearch : partyASelectedName}
+                  onFocus={() => { setShowPartyADropdown(true); setPartyASearch(partyASelectedName); }}
+                  onChange={e => {
+                    setPartyASearch(e.target.value);
+                    setShowPartyADropdown(true);
+                    setGenForm(p => ({ ...p, party_a: '' }));
+                    setTradePreview(null);
+                  }}
+                />
+                {showPartyADropdown && filteredPartyA.length > 0 && (
+                  <ul className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                    {filteredPartyA.slice(0, 20).map(o => (
+                      <li key={o.id}
+                        className="px-4 py-2.5 text-sm cursor-pointer hover:bg-emerald-50 text-slate-700"
+                        onMouseDown={() => {
+                          setGenForm(p => ({ ...p, party_a: o.id }));
+                          setPartyASearch(o.name);
+                          setShowPartyADropdown(false);
+                          setTradePreview(null);
+                        }}>
+                        {o.name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
               {/* 乙方（买方）*/}
-              <div>
+              <div className="relative">
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
                   乙方（买方 / 购买方）<span className="text-rose-400">*</span>
                 </label>
-                <select
+                <input
+                  type="text"
                   className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
-                  value={genForm.party_b}
-                  onChange={e => { setGenForm(p => ({ ...p, party_b: e.target.value })); setTradePreview(null); }}>
-                  <option value="">请选择乙方（集团内部公司）</option>
-                  {orgOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </select>
+                  placeholder="输入关键字搜索乙方..."
+                  value={showPartyBDropdown ? partyBSearch : partyBSelectedName}
+                  onFocus={() => { setShowPartyBDropdown(true); setPartyBSearch(partyBSelectedName); }}
+                  onChange={e => {
+                    setPartyBSearch(e.target.value);
+                    setShowPartyBDropdown(true);
+                    setGenForm(p => ({ ...p, party_b: '' }));
+                    setTradePreview(null);
+                  }}
+                />
+                {showPartyBDropdown && filteredPartyB.length > 0 && (
+                  <ul className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                    {filteredPartyB.slice(0, 20).map(o => (
+                      <li key={o.id}
+                        className="px-4 py-2.5 text-sm cursor-pointer hover:bg-emerald-50 text-slate-700"
+                        onMouseDown={() => {
+                          setGenForm(p => ({ ...p, party_b: o.id }));
+                          setPartyBSearch(o.name);
+                          setShowPartyBDropdown(false);
+                          setTradePreview(null);
+                        }}>
+                        {o.name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
               {/* 贸易时间段 */}
