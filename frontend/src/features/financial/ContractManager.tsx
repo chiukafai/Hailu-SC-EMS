@@ -259,13 +259,6 @@ export default function ContractManager({
     });
   }, [genModal]);
 
-  // 点击空白处关闭下拉
-  useEffect(() => {
-    const handler = () => { setShowPartyADropdown(false); setShowPartyBDropdown(false); };
-    document.addEventListener('click', handler);
-    return () => document.removeEventListener('click', handler);
-  }, []);
-
   // 取整到最近整千
   const roundToThousand = (n: number) => Math.round(n / 1000) * 1000;
 
@@ -687,8 +680,8 @@ export default function ContractManager({
       )}
       {/* ── 合同生成弹窗 ── */}
       {genModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4" onClick={() => { setShowPartyADropdown(false); setShowPartyBDropdown(false); }}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="px-7 py-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-emerald-50 to-teal-50">
               <div>
                 <h3 className="font-black text-slate-800 text-base">🗂️ 智能合同生成</h3>
