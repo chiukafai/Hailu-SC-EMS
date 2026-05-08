@@ -390,13 +390,66 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
                             <section className="bg-slate-50 p-5 rounded-2xl space-y-4">
                                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">2. 工商登记及银行账户</h3>
                                 <div className="grid grid-cols-2 gap-4">
-                                    <input type="date" className="border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" value={formData.founded_at} onChange={e => setFormData({ ...formData, founded_at: e.target.value })} />
-                                    <input className="border-none p-3.5 rounded-xl text-sm shadow-sm bg-white font-bold" placeholder="法人姓名" value={formData.legal_person} onChange={e => setFormData({ ...formData, legal_person: e.target.value })} />
-                                    <input className="border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" placeholder="注册资本 (万)" value={formData.reg_capital} onChange={e => setFormData({ ...formData, reg_capital: e.target.value })} />
-                                    <input className="border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" placeholder="法人联系电话" value={formData.legal_phone} onChange={e => setFormData({ ...formData, legal_phone: e.target.value })} />
-                                    <input className="border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" placeholder="开户银行" value={formData.bank_name} onChange={e => setFormData({ ...formData, bank_name: e.target.value })} />
-                                    <input className="border-none p-3.5 rounded-xl text-sm shadow-sm bg-white font-mono" placeholder="银行账号" value={formData.bank_account} onChange={e => setFormData({ ...formData, bank_account: e.target.value })} />
-                                    <input className="col-span-2 border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" placeholder="注册/经营详细地址" value={formData.reg_address} onChange={e => setFormData({ ...formData, reg_address: e.target.value })} />
+                                    <div className="space-y-1">
+                                        <label className="text-[9px] text-slate-400 font-bold ml-1 uppercase">企业成立日期</label>
+                                        <input type="date" className="w-full border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" value={formData.founded_at} onChange={e => setFormData({ ...formData, founded_at: e.target.value })} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[9px] text-slate-400 font-bold ml-1 uppercase">法人姓名</label>
+                                        <input className="w-full border-none p-3.5 rounded-xl text-sm shadow-sm bg-white font-bold" placeholder="法人代表姓名" value={formData.legal_person} onChange={e => setFormData({ ...formData, legal_person: e.target.value })} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[9px] text-slate-400 font-bold ml-1 uppercase">注册资本 (万元)</label>
+                                        <input className="w-full border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" placeholder="如：500" value={formData.reg_capital} onChange={e => setFormData({ ...formData, reg_capital: e.target.value })} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[9px] text-slate-400 font-bold ml-1 uppercase">法人联系电话</label>
+                                        <input className="w-full border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" placeholder="手机号/座机" value={formData.legal_phone} onChange={e => setFormData({ ...formData, legal_phone: e.target.value })} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[9px] text-slate-400 font-bold ml-1 uppercase">开户银行</label>
+                                        <input className="w-full border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" placeholder="开户银行名称" value={formData.bank_name} onChange={e => setFormData({ ...formData, bank_name: e.target.value })} />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[9px] text-slate-400 font-bold ml-1 uppercase">银行账号</label>
+                                        <input className="w-full border-none p-3.5 rounded-xl text-sm shadow-sm bg-white font-mono" placeholder="对公账户号码" value={formData.bank_account} onChange={e => setFormData({ ...formData, bank_account: e.target.value })} />
+                                    </div>
+                                    <div className="col-span-2 space-y-1">
+                                        <label className="text-[9px] text-slate-400 font-bold ml-1 uppercase">注册/经营详细地址</label>
+                                        <input className="w-full border-none p-3.5 rounded-xl text-sm shadow-sm bg-white" placeholder="省市区详细地址" value={formData.reg_address} onChange={e => setFormData({ ...formData, reg_address: e.target.value })} />
+                                    </div>
+                                </div>
+                            </section>
+                            <section className="bg-amber-50/60 p-5 rounded-2xl space-y-4 border border-amber-100/60">
+                                <h3 className="text-[10px] font-black text-amber-600 uppercase tracking-widest">3. 发票与信用管理</h3>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1">
+                                        <label className="text-[9px] text-amber-600 font-bold ml-1 uppercase">月度开票限额 (元)</label>
+                                        <div className="relative">
+                                            <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">¥</span>
+                                            <input
+                                                type="number"
+                                                className="w-full border-none pl-8 pr-3.5 py-3.5 rounded-xl text-sm shadow-sm bg-white font-mono font-bold focus:ring-2 focus:ring-amber-200 outline-none"
+                                                placeholder="0"
+                                                min="0"
+                                                value={formData.invoice_quota}
+                                                onChange={e => setFormData({ ...formData, invoice_quota: e.target.value })}
+                                            />
+                                        </div>
+                                        <p className="text-[9px] text-amber-500/70 ml-1">每月可开具发票的最高金额上限</p>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[9px] text-amber-600 font-bold ml-1 uppercase">信用评级</label>
+                                        <select className="w-full border-none p-3.5 rounded-xl text-sm shadow-sm bg-white font-bold focus:ring-2 focus:ring-amber-200 outline-none" value={formData.credit_rating} onChange={e => setFormData({ ...formData, credit_rating: e.target.value })}>
+                                            <option value="AAA">AAA — 极优</option>
+                                            <option value="AA">AA — 优良</option>
+                                            <option value="A">A — 良好</option>
+                                            <option value="BBB">BBB — 一般</option>
+                                            <option value="BB">BB — 关注</option>
+                                            <option value="B">B — 偏弱</option>
+                                            <option value="CCC">CCC — 差</option>
+                                        </select>
+                                    </div>
                                 </div>
                             </section>
                             <button onClick={handleSubmit} className="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl shadow-xl shadow-indigo-100 hover:scale-[1.01] transition-all active:scale-95">
