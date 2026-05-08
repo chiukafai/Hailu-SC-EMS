@@ -218,9 +218,10 @@ export default function ContractManager({
   // 所有组织列表（甲方/乙方候选）
   const [orgOptions, setOrgOptions] = useState<{ id: string; name: string }[]>([]);
   // 合同生成表单
+  // 注：贸易数据中甲方=卖方（对应 invoices.org_id），乙方=买方（对应 invoices.client_org_id）
   const [genForm, setGenForm] = useState({
-    party_a: '',   // 购买方（甲方）
-    party_b: '',   // 供应方（乙方）
+    party_a: '',   // 甲方（卖方/供应方）
+    party_b: '',   // 乙方（买方/购买方）
     date_start: '',
     date_end: '',
   });
@@ -268,10 +269,7 @@ export default function ContractManager({
     setTradePreview(null);
     setGenError('');
     try {
-      // 从 invoices 表查询甲乙双方在时间段内的贸易明细
-      // 甲方（购买方）对应 invoices.org_id
-      // 乙方（供应方）对应 invoices.client_org_id（乙方为组织时）
-
+      // 贸易数据定义：甲方=卖方（org_id），乙方=买方（client_org_id）
       // 查询：甲方通过 org_id，乙方通过 client_org_id 精确匹配
       let q = supabase
         .from('invoices')
@@ -279,10 +277,8 @@ export default function ContractManager({
         .gte('trade_date', genForm.date_start)
         .lte('trade_date', genForm.date_end);
 
-      // 通过 org_id 匹配甲方（购买方）
-      if (genForm.party_a) q = q.eq('org_id', genForm.party_a);
-      // 通过 client_org_id 精确匹配乙方（供应方）
-      if (genForm.party_b) q = q.eq('client_org_id', genForm.party_b);
+      if (genForm.party_a) q = q.eq('org_id', genForm.party_a);        // 甲方=卖方
+      if (genForm.party_b) q = q.eq('client_org_id', genForm.party_b); // 乙方=买方
 
       const { data, error } = await q;
       if (error) { setGenError('查询贸易数据失败: ' + error.message); return; }
@@ -674,30 +670,30 @@ export default function ContractManager({
             </div>
             <div className="px-7 py-6 space-y-5 overflow-y-auto max-h-[75vh]">
 
-              {/* 甲方（购买方）*/}
+              {/* 甲方（卖方）*/}
               <div>
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
-                  甲方（购买方）<span className="text-rose-400">*</span>
+                  甲方（卖方 / 供应方）<span className="text-rose-400">*</span>
                 </label>
                 <select
                   className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
                   value={genForm.party_a}
                   onChange={e => { setGenForm(p => ({ ...p, party_a: e.target.value })); setTradePreview(null); }}>
-                  <option value="">请选择购买方（集团内部公司）</option>
+                  <option value="">请选择甲方（集团内部公司）</option>
                   {orgOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </select>
               </div>
 
-              {/* 乙方（供应方）*/}
+              {/* 乙方（买方）*/}
               <div>
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
-                  乙方（供应方）<span className="text-rose-400">*</span>
+                  乙方（买方 / 购买方）<span className="text-rose-400">*</span>
                 </label>
                 <select
                   className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
                   value={genForm.party_b}
                   onChange={e => { setGenForm(p => ({ ...p, party_b: e.target.value })); setTradePreview(null); }}>
-                  <option value="">请选择供应方（集团内部公司）</option>
+                  <option value="">请选择乙方（集团内部公司）</option>
                   {orgOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
                 </select>
               </div>
