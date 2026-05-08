@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../../api/supabase';
 import type { Contract, ContractStatus, ContractType } from '../../types';
 import * as XLSX from 'xlsx';
+import PizZip from 'pizzip';
+import Docxtemplater from 'docxtemplater';
 
 const STATUS_COLORS: Record<ContractStatus, string> = {
   '草稿':   'bg-slate-100 text-slate-600',
@@ -208,6 +210,177 @@ export default function ContractManager({
     XLSX.writeFile(wb, `合同列表_${new Date().toLocaleDateString('zh-CN').replace(/\//g, '-')}.xlsx`);
   };
 
+  // ─── 合同生成 ───────────────────────────────────────────────
+  const [genModal, setGenModal] = useState(false);
+  const [genLoading, setGenLoading] = useState(false);
+  const [genError, setGenError] = useState('');
+
+  // 所有组织列表（甲方/乙方候选）
+  const [orgOptions, setOrgOptions] = useState<{ id: string; name: string }[]>([]);
+  // 合同生成表单
+  const [genForm, setGenForm] = useState({
+    party_a: '',   // 购买方（甲方）
+    party_b: '',   // 供应方（乙方）
+    date_start: '',
+    date_end: '',
+  });
+  // 贸易汇总预览
+  const [tradePreview, setTradePreview] = useState<{
+    totalRaw: number;
+    totalRounded: number;
+    count: number;
+    dateRange: string;
+  } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  // 加载组织列表
+  useEffect(() => {
+    if (!genModal) return;
+    supabase.from('organizations').select('id, name').order('name').then(({ data }) => {
+      setOrgOptions((data ?? []).map(o => ({ id: o.id, name: o.name })));
+    });
+  }, [genModal]);
+
+  // 取整到最近整千
+  const roundToThousand = (n: number) => Math.round(n / 1000) * 1000;
+
+  // 将数字转为中文大写金额（简化版）
+  const toChinaAmount = (n: number): string => {
+    if (!n) return '零元整';
+    const units = ['', '拾', '佰', '仟', '万', '拾万', '佰万', '仟万', '亿'];
+    const digits = ['零', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖'];
+    const str = Math.round(n).toString();
+    let result = '';
+    for (let i = 0; i < str.length; i++) {
+      const d = parseInt(str[i]);
+      const unitIdx = str.length - 1 - i;
+      if (d !== 0) result += digits[d] + units[unitIdx];
+      else if (result && !result.endsWith('零')) result += '零';
+    }
+    result = result.replace(/零+$/, '');
+    return result + '元整';
+  };
+
+  // 查询并预览贸易数据
+  const handlePreviewTrade = async () => {
+    if (!genForm.party_a || !genForm.party_b || !genForm.date_start || !genForm.date_end) return;
+    setPreviewLoading(true);
+    setTradePreview(null);
+    setGenError('');
+    try {
+      // 从 invoices 表查询甲乙双方在时间段内的贸易明细
+      // 甲方（购买方）对应 invoices.org_id
+      // 乙方（供应方）对应 invoices.client_org_id（乙方为组织时）
+
+      // 查询：甲方通过 org_id，乙方通过 client_org_id 精确匹配
+      let q = supabase
+        .from('invoices')
+        .select('amount, trade_date, project_name, client_org_id')
+        .gte('trade_date', genForm.date_start)
+        .lte('trade_date', genForm.date_end);
+
+      // 通过 org_id 匹配甲方（购买方）
+      if (genForm.party_a) q = q.eq('org_id', genForm.party_a);
+      // 通过 client_org_id 精确匹配乙方（供应方）
+      if (genForm.party_b) q = q.eq('client_org_id', genForm.party_b);
+
+      const { data, error } = await q;
+      if (error) { setGenError('查询贸易数据失败: ' + error.message); return; }
+
+      const rows = data ?? [];
+      const totalRaw = rows.reduce((s, r) => s + (r.amount || 0), 0);
+      const totalRounded = roundToThousand(totalRaw);
+
+      setTradePreview({
+        totalRaw,
+        totalRounded,
+        count: rows.length,
+        dateRange: `${genForm.date_start} 至 ${genForm.date_end}`,
+      });
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  // 生成合同 docx
+  const handleGenerateContract = async () => {
+    if (!tradePreview) { setGenError('请先查询贸易数据'); return; }
+    setGenLoading(true);
+    setGenError('');
+    try {
+      const partyAName = orgOptions.find(o => o.id === genForm.party_a)?.name || genForm.party_a;
+      const partyBName = orgOptions.find(o => o.id === genForm.party_b)?.name || genForm.party_b;
+
+      // 生成合同编号
+      const today = new Date();
+      const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
+      const contractNo = `HLS-${dateStr}-${Math.floor(Math.random() * 9000 + 1000)}`;
+
+      // 中文大写金额
+      const amountCN = toChinaAmount(tradePreview.totalRounded);
+      const amountNum = tradePreview.totalRounded.toLocaleString('zh-CN');
+
+      // 签署日期
+      const signDate = today.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+
+      // fetch 模板文件
+      const resp = await fetch('/contract_template.docx');
+      if (!resp.ok) throw new Error('无法加载合同模板文件');
+      const arrayBuf = await resp.arrayBuffer();
+
+      const zip = new PizZip(arrayBuf);
+      const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+      });
+
+      // 替换占位符
+      doc.render({
+        合同编号: contractNo,
+        甲方: partyAName,
+        乙方: partyBName,
+        开始日期: genForm.date_start,
+        结束日期: genForm.date_end,
+        签署日期: signDate,
+      });
+
+      const buf = doc.getZip().generate({ type: 'arraybuffer' });
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `购销合同_${partyAName}_${partyBName}_${dateStr}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      // 同时将合同信息写入数据库
+      await supabase.from('contracts').insert({
+        contract_no: contractNo,
+        contract_name: `${partyAName}与${partyBName}购销合同`,
+        contract_type: '采购合同',
+        party_a_name: partyAName,
+        party_b_name: partyBName,
+        amount: tradePreview.totalRounded,
+        signed_at: today.toISOString().slice(0, 10),
+        effective_at: genForm.date_start,
+        expired_at: genForm.date_end,
+        status: '待签署',
+        remarks: `由贸易明细自动生成，共 ${tradePreview.count} 笔，原始金额 ¥${tradePreview.totalRaw.toLocaleString('zh-CN')}，取整 ¥${amountNum}（${amountCN}）`,
+        created_by: currentUser?.username || null,
+      });
+
+      setGenModal(false);
+      setTradePreview(null);
+      setGenForm({ party_a: '', party_b: '', date_start: '', date_end: '' });
+      fetchContracts();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setGenError('生成失败: ' + msg);
+    } finally {
+      setGenLoading(false);
+    }
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -247,6 +420,10 @@ export default function ContractManager({
           <button onClick={handleExport}
             className="px-4 py-2 text-xs font-bold bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors">
             导出 Excel
+          </button>
+          <button onClick={() => { setGenModal(true); setGenError(''); setTradePreview(null); }}
+            className="px-4 py-2 text-xs font-bold bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 shadow-sm transition-colors flex items-center gap-1.5">
+            🗂️ 生成合同
           </button>
           {canEdit && (
             <button onClick={openNew}
@@ -481,6 +658,138 @@ export default function ContractManager({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* ── 合同生成弹窗 ── */}
+      {genModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden">
+            <div className="px-7 py-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-emerald-50 to-teal-50">
+              <div>
+                <h3 className="font-black text-slate-800 text-base">🗂️ 智能合同生成</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">根据贸易明细自动填充合同模板</p>
+              </div>
+              <button onClick={() => setGenModal(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">×</button>
+            </div>
+            <div className="px-7 py-6 space-y-5 overflow-y-auto max-h-[75vh]">
+
+              {/* 甲方（购买方）*/}
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
+                  甲方（购买方）<span className="text-rose-400">*</span>
+                </label>
+                <select
+                  className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
+                  value={genForm.party_a}
+                  onChange={e => { setGenForm(p => ({ ...p, party_a: e.target.value })); setTradePreview(null); }}>
+                  <option value="">请选择购买方（集团内部公司）</option>
+                  {orgOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+
+              {/* 乙方（供应方）*/}
+              <div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
+                  乙方（供应方）<span className="text-rose-400">*</span>
+                </label>
+                <select
+                  className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
+                  value={genForm.party_b}
+                  onChange={e => { setGenForm(p => ({ ...p, party_b: e.target.value })); setTradePreview(null); }}>
+                  <option value="">请选择供应方（集团内部公司）</option>
+                  {orgOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+
+              {/* 贸易时间段 */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
+                    开始日期 <span className="text-rose-400">*</span>
+                  </label>
+                  <input type="date"
+                    className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
+                    value={genForm.date_start}
+                    onChange={e => { setGenForm(p => ({ ...p, date_start: e.target.value })); setTradePreview(null); }} />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
+                    结束日期 <span className="text-rose-400">*</span>
+                  </label>
+                  <input type="date"
+                    className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
+                    value={genForm.date_end}
+                    onChange={e => { setGenForm(p => ({ ...p, date_end: e.target.value })); setTradePreview(null); }} />
+                </div>
+              </div>
+
+              {/* 查询贸易明细按钮 */}
+              <button
+                type="button"
+                disabled={!genForm.party_a || !genForm.party_b || !genForm.date_start || !genForm.date_end || previewLoading}
+                onClick={handlePreviewTrade}
+                className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-sm font-bold hover:bg-slate-200 transition-colors disabled:opacity-40 flex items-center justify-center gap-2">
+                {previewLoading ? '查询中...' : '🔍 查询贸易明细'}
+              </button>
+
+              {/* 贸易数据预览 */}
+              {tradePreview && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-2">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-emerald-600 font-black text-sm">📊 贸易汇总预览</span>
+                    <span className="text-[10px] text-emerald-500 bg-emerald-100 px-2 py-0.5 rounded-full">{tradePreview.dateRange}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="bg-white rounded-xl p-3">
+                      <div className="text-slate-400 text-[10px] mb-1">贸易笔数</div>
+                      <div className="font-black text-slate-800 text-lg">{tradePreview.count} 笔</div>
+                    </div>
+                    <div className="bg-white rounded-xl p-3">
+                      <div className="text-slate-400 text-[10px] mb-1">原始合计金额</div>
+                      <div className="font-black text-slate-700">¥ {tradePreview.totalRaw.toLocaleString('zh-CN')}</div>
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-xl p-3">
+                    <div className="text-slate-400 text-[10px] mb-1">合同金额（取整千元）</div>
+                    <div className="font-black text-emerald-700 text-xl">¥ {tradePreview.totalRounded.toLocaleString('zh-CN')}</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">{toChinaAmount(tradePreview.totalRounded)}</div>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 text-xs text-slate-500 space-y-1">
+                    <div><span className="font-bold text-slate-700">数量：</span>一批</div>
+                    <div><span className="font-bold text-slate-700">单价：</span>时价</div>
+                  </div>
+                  {tradePreview.count === 0 && (
+                    <div className="text-amber-600 text-xs font-bold bg-amber-50 rounded-xl p-3">
+                      ⚠️ 该时间段内未查到贸易记录，合同金额将为 ¥0，请确认后继续。
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 错误提示 */}
+              {genError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-600 font-bold">
+                  ⚠️ {genError}
+                </div>
+              )}
+
+              {/* 操作按钮 */}
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => setGenModal(false)}
+                  className="flex-1 py-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-500 hover:bg-slate-50 transition-colors">
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={!tradePreview || genLoading}
+                  onClick={handleGenerateContract}
+                  className="flex-1 py-3 rounded-xl bg-emerald-600 text-white text-sm font-black hover:bg-emerald-700 transition-colors disabled:opacity-40 flex items-center justify-center gap-2">
+                  {genLoading ? '生成中...' : '📄 生成并下载合同'}
+                </button>
+              </div>
+
+            </div>
           </div>
         </div>
       )}
