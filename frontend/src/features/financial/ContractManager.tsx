@@ -3,6 +3,108 @@ import { supabase } from '../../api/supabase';
 import type { Contract, ContractStatus, ContractType } from '../../types';
 import * as XLSX from 'xlsx';
 import PizZip from 'pizzip';
+
+// ════════════════════════════════════════════════════════════════════
+// 合同模板商品明细 XML 注入工具（docxtemplater 无法处理多行表格）
+// 模板：购销合同模板_utf8.docx（UTF-8 编码）
+// 表格结构：行0=表头(品种/单位/单价/数量/金额)，行1=数据行(公斤占位)
+// docxtemplater 渲染时不传商品明细 → Cell 0-4 需手动注入数据
+// ════════════════════════════════════════════════════════════════════
+
+function xmlText(raw: unknown): string {
+  if (raw == null) return '';
+  return String(raw)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** 新模板注入函数：按 Cell 顺序注入商品数据
+ * 表格5列：Cell0=品种(空→商品名), Cell1=单位(公斤→商品名),
+ *          Cell2=单价(空→单价), Cell3=数量(空→数量), Cell4=金额(空→金额)
+ */
+function injectTextToRowCells(rowXml: string, invoice: {
+  product_info?: string; quantity?: number; unit_price?: number; amount?: number;
+}) {
+  const vals = [
+    xmlText(invoice.product_info || ''),           // Cell 0 - 品种
+    xmlText(invoice.product_info || '公斤'),      // Cell 1 - 单位（替换公斤）
+    invoice.quantity != null ? String(invoice.quantity) : '',      // Cell 2 - 数量
+    invoice.unit_price != null ? invoice.unit_price.toFixed(2) : '', // Cell 3 - 单价
+    invoice.amount != null
+      ? invoice.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })
+      : '',                                       // Cell 4 - 金额
+  ];
+
+  // 提取5个单元格
+  const cells: string[] = [];
+  let cp = 0;
+  while ((cp = rowXml.indexOf('<w:tc>', cp)) !== -1) {
+    const ce = rowXml.indexOf('</w:tc>', cp) + 7;
+    cells.push(rowXml.substring(cp, ce));
+    cp = ce;
+  }
+  if (cells.length !== 5) return rowXml;
+
+  // Cell 0: 注入商品名（空单元格 → 追加 run）
+  let cell0 = cells[0];
+  const p0 = cell0.indexOf('</w:p>');
+  if (p0 !== -1) {
+    cell0 = cell0.substring(0, p0) + `<w:r><w:t>${vals[0]}</w:t></w:r>` + cell0.substring(p0);
+  }
+
+  // Cell 1: 替换"公斤"为商品名
+  let cell1 = cells[1].replace('<w:t>公斤</w:t>', `<w:t>${vals[1]}</w:t>`);
+
+  // Cell 2-4: 注入数值（追加 run 到空段落）
+  let cell2 = cells[2];
+  const p2 = cell2.indexOf('</w:p>');
+  if (p2 !== -1) {
+    cell2 = cell2.substring(0, p2) + `<w:r><w:t>${vals[2]}</w:t></w:r>` + cell2.substring(p2);
+  }
+
+  let cell3 = cells[3];
+  const p3 = cell3.indexOf('</w:p>');
+  if (p3 !== -1) {
+    cell3 = cell3.substring(0, p3) + `<w:r><w:t>${vals[3]}</w:t></w:r>` + cell3.substring(p3);
+  }
+
+  let cell4 = cells[4];
+  const p4 = cell4.indexOf('</w:p>');
+  if (p4 !== -1) {
+    cell4 = cell4.substring(0, p4) + `<w:r><w:t>${vals[4]}</w:t></w:r>` + cell4.substring(p4);
+  }
+
+  const trTagEnd = rowXml.indexOf('>');
+  const trOpenTag = rowXml.substring(0, trTagEnd + 1);
+  return trOpenTag + cell0 + cell1 + cell2 + cell3 + cell4 + '</w:tr>';
+}
+
+function injectInvoiceRowsIntoDocXml(
+  xmlStr: string,
+  invoiceRows: { product_info?: string; quantity?: number; unit_price?: number; amount?: number }[]
+): string {
+  const tblStart = xmlStr.indexOf('<w:tbl>');
+  if (tblStart === -1) return xmlStr;
+  const tblEnd = xmlStr.indexOf('</w:tbl>') + 8;
+  const tbl = xmlStr.substring(tblStart, tblEnd);
+
+  // 定位第2行（rowIdx=1 = 数据行）
+  let rp = 0, rowIdx = 0;
+  let dataRowStart = -1, dataRowEnd = -1;
+  while ((rp = tbl.indexOf('<w:tr', rp)) !== -1) {
+    const re = tbl.indexOf('</w:tr>', rp) + 7;
+    if (rowIdx === 1) { dataRowStart = rp; dataRowEnd = re; break; }
+    rowIdx++;
+    rp = re;
+  }
+  if (dataRowStart === -1) return xmlStr;
+
+  const dataRowXml = tbl.substring(dataRowStart, dataRowEnd);
+  const newRows = invoiceRows.map(inv => injectTextToRowCells(dataRowXml, inv));
+
+  return xmlStr.substring(0, tblStart + dataRowStart) + newRows.join('') + xmlStr.substring(tblStart + dataRowEnd);
+}
 import Docxtemplater from 'docxtemplater';
 
 const STATUS_COLORS: Record<ContractStatus, string> = {
@@ -215,21 +317,34 @@ export default function ContractManager({
   const [genLoading, setGenLoading] = useState(false);
   const [genError, setGenError] = useState('');
 
-  // 所有组织列表（甲方/乙方候选）
-  const [orgOptions, setOrgOptions] = useState<{ id: string; name: string }[]>([]);
+  // 甲乙方候选：organizations + global_clients 合并
+  // source 区分来源：'org' | 'client'
+  const [orgOptions, setOrgOptions] = useState<{ id: string; name: string; source: 'org' | 'client'; taxId: string }[]>([]);
   // 关键字搜索输入（与已选ID分离）
   const [partyASearch, setPartyASearch] = useState('');
   const [partyBSearch, setPartyBSearch] = useState('');
   // 下拉展开状态
   const [showPartyADropdown, setShowPartyADropdown] = useState(false);
   const [showPartyBDropdown, setShowPartyBDropdown] = useState(false);
-  // 关键字匹配过滤
-  const filteredPartyA = orgOptions.filter(o =>
-    o.name.toLowerCase().includes(partyASearch.toLowerCase())
-  );
-  const filteredPartyB = orgOptions.filter(o =>
-    o.name.toLowerCase().includes(partyBSearch.toLowerCase())
-  );
+  // 动态搜索结果（服务端按关键字过滤，避免全量加载截断问题）
+  const [filteredPartyA, setFilteredPartyA] = useState<{ id: string; name: string; source: 'org' | 'client'; taxId: string }[]>([]);
+  const [filteredPartyB, setFilteredPartyB] = useState<{ id: string; name: string; source: 'org' | 'client'; taxId: string }[]>([]);
+
+  // 按关键字动态搜索甲/乙方候选（服务端 ilike，解决前端全量截断问题）
+  const searchPartyOptions = async (keyword: string): Promise<{ id: string; name: string; source: 'org' | 'client'; taxId: string }[]> => {
+    if (!keyword.trim()) {
+      // 无关键字时返回预加载的全量 orgOptions（集团公司 + 客户前1000条）
+      return orgOptions;
+    }
+    const kw = `%${keyword}%`;
+    const [orgsRes, clientsRes] = await Promise.all([
+      supabase.from('organizations').select('id, name').ilike('name', kw).order('name').limit(30),
+      supabase.from('global_clients').select('id, full_name, tax_id').ilike('full_name', kw).order('full_name').limit(30),
+    ]);
+    const orgs = (orgsRes.data ?? []).map(o => ({ id: o.id, name: o.name, source: 'org' as const, taxId: '' }));
+    const clients = (clientsRes.data ?? []).map(c => ({ id: c.id, name: c.full_name, source: 'client' as const, taxId: c.tax_id || '' }));
+    return [...orgs, ...clients];
+  };
 
   // 合同生成表单
   // 注：贸易数据中甲方=卖方（对应 invoices.org_id），乙方=买方（对应 invoices.client_org_id）
@@ -239,9 +354,12 @@ export default function ContractManager({
     date_start: '',
     date_end: '',
   });
-  // 已选公司的显示名（用于 input 的只读展示，genForm 声明后才能引用）
-  const partyASelectedName = orgOptions.find(o => o.id === genForm.party_a)?.name || '';
-  const partyBSelectedName = orgOptions.find(o => o.id === genForm.party_b)?.name || '';
+  // 已选公司的完整信息（直接从下拉选中时记录，不依赖 orgOptions 反查——
+  // 因为服务端搜索结果不在 orgOptions 里，反查会丢失名称）
+  const [partyASelected, setPartyASelected] = useState<{ id: string; name: string; source: 'org' | 'client'; taxId: string } | null>(null);
+  const [partyBSelected, setPartyBSelected] = useState<{ id: string; name: string; source: 'org' | 'client'; taxId: string } | null>(null);
+  const partyASelectedName = partyASelected?.name || '';
+  const partyBSelectedName = partyBSelected?.name || '';
   // 贸易汇总预览
   const [tradePreview, setTradePreview] = useState<{
     totalRaw: number;
@@ -251,11 +369,17 @@ export default function ContractManager({
   } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // 加载组织列表
+  // 加载候选列表：organizations（集团公司）+ global_clients（合作客户）合并
   useEffect(() => {
     if (!genModal) return;
-    supabase.from('organizations').select('id, name').order('name').then(({ data }) => {
-      setOrgOptions((data ?? []).map(o => ({ id: o.id, name: o.name })));
+    Promise.all([
+      supabase.from('organizations').select('id, name').order('name'),
+      supabase.from('global_clients').select('id, full_name, tax_id').order('full_name'),
+    ]).then(([orgsRes, clientsRes]) => {
+      const orgs = (orgsRes.data ?? []).map(o => ({ id: o.id, name: o.name, source: 'org' as const, taxId: '' }));
+      const clients = (clientsRes.data ?? []).map(c => ({ id: c.id, name: c.full_name, source: 'client' as const, taxId: c.tax_id || '' }));
+      // 合并，org 优先展示
+      setOrgOptions([...orgs, ...clients]);
     });
   }, [genModal]);
 
@@ -286,16 +410,31 @@ export default function ContractManager({
     setTradePreview(null);
     setGenError('');
     try {
-      // 贸易数据定义：甲方=卖方（org_id），乙方=买方（client_org_id）
-      // 查询：甲方通过 org_id，乙方通过 client_org_id 精确匹配
+      // 根据来源确定乙方查询字段：
+      //   - 集团公司（org）→ invoices.client_org_id
+      //   - 合作客户（client）→ invoices.client_tax_id（用 tax_id 关联）
+      const partyBOption = partyBSelected;
+
       let q = supabase
         .from('invoices')
-        .select('amount, trade_date, project_name, client_org_id')
+        .select('amount, trade_date, project_name, product_info, quantity, unit_price')
         .gte('trade_date', genForm.date_start)
         .lte('trade_date', genForm.date_end);
 
-      if (genForm.party_a) q = q.eq('org_id', genForm.party_a);        // 甲方=卖方
-      if (genForm.party_b) q = q.eq('client_org_id', genForm.party_b); // 乙方=买方
+      // 甲方：集团公司 → org_id
+      if (genForm.party_a) q = q.eq('org_id', genForm.party_a);
+
+      // 乙方：按来源走不同字段
+      if (partyBOption) {
+        if (partyBOption.source === 'org') {
+          q = q.eq('client_org_id', partyBOption.id);
+        } else {
+          // 合作客户，用 tax_id 匹配 client_tax_id
+          if (partyBOption.taxId) {
+            q = q.eq('client_tax_id', partyBOption.taxId);
+          }
+        }
+      }
 
       const { data, error } = await q;
       if (error) { setGenError('查询贸易数据失败: ' + error.message); return; }
@@ -317,12 +456,33 @@ export default function ContractManager({
 
   // 生成合同 docx
   const handleGenerateContract = async () => {
-    if (!tradePreview) { setGenError('请先查询贸易数据'); return; }
+    if (!genForm.party_a || !genForm.party_b || !genForm.date_start || !genForm.date_end) {
+      setGenError('请先填写完整信息并查询贸易明细');
+      return;
+    }
     setGenLoading(true);
     setGenError('');
     try {
-      const partyAName = orgOptions.find(o => o.id === genForm.party_a)?.name || genForm.party_a;
-      const partyBName = orgOptions.find(o => o.id === genForm.party_b)?.name || genForm.party_b;
+      const partyAName = partyASelected?.name || genForm.party_a;
+      const partyBName = partyBSelected?.name || genForm.party_b;
+
+      // ── 重新查询明细行（含商品字段）───────────────────────────────
+      const partyBOption = partyBSelected;
+      let q = supabase
+        .from('invoices')
+        .select('amount, product_info, quantity, unit_price')
+        .gte('trade_date', genForm.date_start)
+        .lte('trade_date', genForm.date_end);
+      if (genForm.party_a) q = q.eq('org_id', genForm.party_a);
+      if (partyBOption) {
+        if (partyBOption.source === 'org') q = q.eq('client_org_id', partyBOption.id);
+        else if (partyBOption.taxId) q = q.eq('client_tax_id', partyBOption.taxId);
+      }
+      const { data: rawRows } = await q;
+      const rows = rawRows ?? [];
+
+      const totalRaw = rows.reduce((s, r) => s + (r.amount || 0), 0);
+      const totalRounded = roundToThousand(totalRaw);
 
       // 生成合同编号
       const today = new Date();
@@ -330,14 +490,14 @@ export default function ContractManager({
       const contractNo = `HLS-${dateStr}-${Math.floor(Math.random() * 9000 + 1000)}`;
 
       // 中文大写金额
-      const amountCN = toChinaAmount(tradePreview.totalRounded);
-      const amountNum = tradePreview.totalRounded.toLocaleString('zh-CN');
+      const amountCN = toChinaAmount(totalRounded);
+      const amountNum = totalRounded.toLocaleString('zh-CN');
 
       // 签署日期
       const signDate = today.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
 
-      // fetch 模板文件
-      const resp = await fetch('/contract_template.docx');
+      // fetch 合同模板文件
+      const resp = await fetch('/购销合同模板_utf8.docx');
       if (!resp.ok) throw new Error('无法加载合同模板文件');
       const arrayBuf = await resp.arrayBuffer();
 
@@ -345,9 +505,10 @@ export default function ContractManager({
       const doc = new Docxtemplater(zip, {
         paragraphLoop: true,
         linebreaks: true,
+        delimiters: { start: '{{', end: '}}' },   // docxtemplater 3.x 默认分隔符变更，需显式指定
       });
 
-      // 替换占位符
+      // docxtemplater 渲染（不传商品明细 → 数据行留下 undefined 占位符）
       doc.render({
         合同编号: contractNo,
         甲方: partyAName,
@@ -357,8 +518,20 @@ export default function ContractManager({
         签署日期: signDate,
       });
 
-      const buf = doc.getZip().generate({ type: 'arraybuffer' });
-      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      // ── UTF-8 编码链：asBinary() → Uint8Array → TextDecoder → 字符串替换 → TextEncoder → Uint8Array → PizZip ──
+      // 模板为 UTF-8 编码，无需 iconv，直接走 PizZip Uint8Array 通道
+      const xmlBin = doc.getZip().files['word/document.xml'].asBinary();
+      const xmlBytes = new Uint8Array(xmlBin.length);
+      for (let i = 0; i < xmlBin.length; i++) xmlBytes[i] = xmlBin.charCodeAt(i);
+      const xmlStrUtf8 = new TextDecoder('utf-8').decode(xmlBytes);
+
+      const xmlStrInjected = injectInvoiceRowsIntoDocXml(xmlStrUtf8, rows);
+
+      // UTF-8 → Uint8Array，直接传给 PizZip（不转 binary string）
+      const outBytes = new TextEncoder().encode(xmlStrInjected);
+      doc.getZip().file('word/document.xml', outBytes);
+      const outBuf = doc.getZip().generate({ type: 'arraybuffer' });
+      const blob = new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -373,12 +546,12 @@ export default function ContractManager({
         contract_type: '采购合同',
         party_a_name: partyAName,
         party_b_name: partyBName,
-        amount: tradePreview.totalRounded,
+        amount: totalRounded,
         signed_at: today.toISOString().slice(0, 10),
         effective_at: genForm.date_start,
         expired_at: genForm.date_end,
         status: '待签署',
-        remarks: `由贸易明细自动生成，共 ${tradePreview.count} 笔，原始金额 ¥${tradePreview.totalRaw.toLocaleString('zh-CN')}，取整 ¥${amountNum}（${amountCN}）`,
+        remarks: `由贸易明细自动生成，共 ${rows.length} 笔，原始金额 ¥${totalRaw.toLocaleString('zh-CN')}，取整 ¥${amountNum}（${amountCN}）`,
         created_by: currentUser?.username || null,
       });
 
@@ -389,6 +562,8 @@ export default function ContractManager({
       setPartyBSearch('');
       setShowPartyADropdown(false);
       setShowPartyBDropdown(false);
+      setPartyASelected(null);
+      setPartyBSelected(null);
       fetchContracts();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -438,7 +613,7 @@ export default function ContractManager({
             className="px-4 py-2 text-xs font-bold bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors">
             导出 Excel
           </button>
-          <button onClick={() => { setGenModal(true); setGenError(''); setTradePreview(null); setPartyASearch(''); setPartyBSearch(''); setShowPartyADropdown(false); setShowPartyBDropdown(false); }}
+          <button onClick={() => { setGenModal(true); setGenError(''); setTradePreview(null); setPartyASearch(''); setPartyBSearch(''); setShowPartyADropdown(false); setShowPartyBDropdown(false); setPartyASelected(null); setPartyBSelected(null); }}
             className="px-4 py-2 text-xs font-bold bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 shadow-sm transition-colors flex items-center gap-1.5">
             🗂️ 生成合同
           </button>
@@ -701,26 +876,38 @@ export default function ContractManager({
                   className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
                   placeholder="输入关键字搜索甲方..."
                   value={showPartyADropdown ? partyASearch : partyASelectedName}
-                  onFocus={() => { setShowPartyADropdown(true); setPartyASearch(partyASelectedName); }}
-                  onChange={e => {
-                    setPartyASearch(e.target.value);
+                  onFocus={async () => {
+                    setShowPartyADropdown(true);
+                    setPartyASearch(partyASelectedName);
+                    const results = await searchPartyOptions(partyASelectedName);
+                    setFilteredPartyA(results);
+                  }}
+                  onChange={async e => {
+                    const val = e.target.value;
+                    setPartyASearch(val);
                     setShowPartyADropdown(true);
                     setGenForm(p => ({ ...p, party_a: '' }));
                     setTradePreview(null);
+                    const results = await searchPartyOptions(val);
+                    setFilteredPartyA(results);
                   }}
                 />
                 {showPartyADropdown && filteredPartyA.length > 0 && (
                   <ul className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
-                    {filteredPartyA.slice(0, 20).map(o => (
+                    {filteredPartyA.map(o => (
                       <li key={o.id}
-                        className="px-4 py-2.5 text-sm cursor-pointer hover:bg-emerald-50 text-slate-700"
+                        className="px-4 py-2.5 text-sm cursor-pointer hover:bg-emerald-50 text-slate-700 flex items-center justify-between"
                         onMouseDown={() => {
                           setGenForm(p => ({ ...p, party_a: o.id }));
+                          setPartyASelected(o);
                           setPartyASearch(o.name);
                           setShowPartyADropdown(false);
                           setTradePreview(null);
                         }}>
-                        {o.name}
+                        <span>{o.name}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ml-2 shrink-0 ${o.source === 'org' ? 'bg-blue-100 text-blue-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                          {o.source === 'org' ? '集团' : '客户'}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -737,26 +924,38 @@ export default function ContractManager({
                   className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-slate-50 focus:bg-white outline-none"
                   placeholder="输入关键字搜索乙方..."
                   value={showPartyBDropdown ? partyBSearch : partyBSelectedName}
-                  onFocus={() => { setShowPartyBDropdown(true); setPartyBSearch(partyBSelectedName); }}
-                  onChange={e => {
-                    setPartyBSearch(e.target.value);
+                  onFocus={async () => {
+                    setShowPartyBDropdown(true);
+                    setPartyBSearch(partyBSelectedName);
+                    const results = await searchPartyOptions(partyBSelectedName);
+                    setFilteredPartyB(results);
+                  }}
+                  onChange={async e => {
+                    const val = e.target.value;
+                    setPartyBSearch(val);
                     setShowPartyBDropdown(true);
                     setGenForm(p => ({ ...p, party_b: '' }));
                     setTradePreview(null);
+                    const results = await searchPartyOptions(val);
+                    setFilteredPartyB(results);
                   }}
                 />
                 {showPartyBDropdown && filteredPartyB.length > 0 && (
                   <ul className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
-                    {filteredPartyB.slice(0, 20).map(o => (
+                    {filteredPartyB.map(o => (
                       <li key={o.id}
-                        className="px-4 py-2.5 text-sm cursor-pointer hover:bg-emerald-50 text-slate-700"
+                        className="px-4 py-2.5 text-sm cursor-pointer hover:bg-emerald-50 text-slate-700 flex items-center justify-between"
                         onMouseDown={() => {
                           setGenForm(p => ({ ...p, party_b: o.id }));
+                          setPartyBSelected(o);
                           setPartyBSearch(o.name);
                           setShowPartyBDropdown(false);
                           setTradePreview(null);
                         }}>
-                        {o.name}
+                        <span>{o.name}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ml-2 shrink-0 ${o.source === 'org' ? 'bg-blue-100 text-blue-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                          {o.source === 'org' ? '集团' : '客户'}
+                        </span>
                       </li>
                     ))}
                   </ul>
