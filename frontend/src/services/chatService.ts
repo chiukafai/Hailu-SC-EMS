@@ -27,11 +27,26 @@ export const chatService = {
       .from('chat_messages')
       .select(`
         *,
-        sender:app_users!sender_id(full_name)
+        sender:app_users!sender_id(full_name, role, client_id)
       `)
       .or(`and(sender_id.eq.${myId},receiver_id.eq.${otherId}),and(sender_id.eq.${otherId},receiver_id.eq.${myId})`)
       .order('created_at', { ascending: true });
-    return { data, error };
+    
+    // 如果接收方是客户，且发送方是内部用户，则显示"海露集团"
+    const processedData = data?.map(msg => {
+        const sender = (msg as any).sender;
+        // 如果 sender 存在且 role 是 'user'（内部用户），但 receiver 是 client，则显示"海露集团"
+        if (sender && sender.role === 'user') {
+            return {
+                ...msg,
+                sender_name: '海露集团',
+                _original_sender: sender
+            };
+        }
+        return msg;
+    });
+    
+    return { data: processedData, error };
   },
 
   // 获取特定贸易记录相关的讨论
@@ -162,30 +177,53 @@ export const chatService = {
 
   // 深度搜索：通过公司名称、纳税号或姓名查找
   searchGlobalEntities: async (queryStr: string) => {
-    // 1. 搜索客户表 (获取纳税号)
-    const { data: clients } = await supabase
-      .from('global_clients')
-      .select('tax_id, full_name')
-      .or(`full_name.ilike.%${queryStr}%,tax_id.eq.${queryStr}`);
+    console.log('[chatService] searchGlobalEntities 搜索关键词:', queryStr);
     
+    try {
+      // 1. 搜索用户表 - 使用 .or() 匹配姓名、用户名
+      const { data: users, error: userError } = await supabase
+        .from('app_users')
+        .select('id, full_name, username, role, client_id, department_id')
+        .or(`full_name.ilike.%${queryStr}%,username.ilike.%${queryStr}%`);
+      
+      if (userError) {
+        console.error('[chatService] 搜索用户表错误:', userError);
+      }
+      
+      console.log('[chatService] 用户表搜索结果:', users?.length || 0, users);
 
-    const clientTaxIds = clients?.map(c => c.tax_id) || [];
+      // 2. 搜索客户表 - 匹配：客户名称、纳税号
+      const { data: clients, error: clientError } = await supabase
+        .from('global_clients')
+        .select('tax_id, full_name')
+        .or(`full_name.ilike.%${queryStr}%,tax_id.ilike.%${queryStr}%`);
+      
+      if (clientError) {
+        console.error('[chatService] 搜索客户表错误:', clientError);
+      }
+      
+      console.log('[chatService] 客户表搜索结果:', clients?.length || 0, clients);
 
-    // 3. 构建用户表查询
-    // 匹配：姓名、用户名、所属客户ID、或管理员手动填写的备注
-    let userQuery = supabase
-      .from('app_users')
-      .select('id, full_name, username, role, client_id');
-    
-    const filters = [`full_name.ilike.%${queryStr}%`, `username.ilike.%${queryStr}%` ];
-    
-    if (clientTaxIds.length > 0) {
-        // 格式化为: client_id.in.("ID1","ID2")
-        filters.push(`client_id.in.("${clientTaxIds.join('","')}")`);
+      // 3. 合并结果：用户 + 客户
+      const combined = [
+          ...(users || []),
+          ...(clients || []).map(c => ({
+              id: `client_${c.tax_id}`,
+              full_name: c.full_name,
+              username: c.full_name,
+              role: 'client',
+              client_id: c.tax_id,
+              is_client: true
+          }))
+      ];
+
+      console.log('[chatService] 合并后结果:', combined.length, combined);
+
+      return { data: combined, error: userError || clientError };
+    } catch (err) {
+      console.error('[chatService] searchGlobalEntities 异常:', err);
+      return { data: [], error: err };
     }
-
-    const { data: users, error } = await userQuery.or(filters.join(','));
-    return { data: users, error };
   },
 
   // 自动建立连接 (业务驱动)
@@ -199,10 +237,39 @@ export const chatService = {
       .or(`and(requester_id.eq.${myId},receiver_id.eq.${otherId}),and(requester_id.eq.${otherId},receiver_id.eq.${myId})`);
     
     if (existing && existing.length > 0) return;
-
+    
     // 不存在则自动建立已通过的连接
     await supabase
       .from('chat_connections')
       .insert([{ requester_id: myId, receiver_id: otherId, status: 'accepted' }]);
+  },
+
+  // 获取所有实体（用户 + 客户公司）- 用于管理员查看所有可联系人
+  getAllEntities: async () => {
+    console.log('[chatService] getAllEntities 获取所有用户和客户');
+    const [usersResult, clientsResult] = await Promise.all([
+      supabase.from('app_users').select('id, full_name, username, role, client_id, department_id').order('full_name', { ascending: true }),
+      supabase.from('global_clients').select('tax_id, full_name')
+    ]);
+    
+    if (usersResult.error) console.error('[chatService] 获取用户错误:', usersResult.error);
+    if (clientsResult.error) console.error('[chatService] 获取客户错误:', clientsResult.error);
+    
+    const users = usersResult.data || [];
+    const clients = (clientsResult.data || []).map(c => ({
+      id: `client_${c.tax_id}`,
+      full_name: c.full_name,
+      username: c.full_name,
+      role: 'client',
+      client_id: c.tax_id,
+      is_client: true
+    }));
+    
+    console.log('[chatService] 所有用户:', users.length, '所有客户:', clients.length);
+    
+    return { 
+      data: [...users, ...clients], 
+      error: usersResult.error || clientsResult.error 
+    };
   }
 };

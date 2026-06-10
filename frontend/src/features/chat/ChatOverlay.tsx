@@ -26,6 +26,11 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
   
+  // 管理员分类数据
+  const [orgStructure, setOrgStructure] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<any[]>([]);
+  const [clients, setClients] = useState<any[]>([]);
+  
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -78,7 +83,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
   // 监听搜索输入
   useEffect(() => {
     const handler = setTimeout(() => {
-        if (userSearchTerm.trim()) {
+        if (userSearchTerm.trim() && (currentUser.role === 'admin' || currentUser.role === 'client' || currentUser.role === 'user')) {
             handleDeepSearch();
         } else {
             setSearchResults([]);
@@ -141,6 +146,37 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
       } else {
         setDeptMembers([]);
       }
+
+      // 管理员：分类显示 - 集团架构、部门管理、合作客户
+      if (currentUser.role === 'admin') {
+        const { data: all } = await chatService.getAllUsers();
+        if (all) {
+          const users = all.filter(u => u.id !== currentUser.id);
+          setOrgStructure(users.filter(u => !u.department_id && u.role === 'user'));
+          setDepartments(users.filter(u => u.department_id && u.role === 'user'));
+          setClients(users.filter(u => u.role === 'client'));
+          setAllUsers([]);
+        }
+      } else {
+        // 普通用户只能看到已连接的业务伙伴
+        if (currentUser.role === 'client' || currentUser.role === 'user') {
+          const { data: connections } = await chatService.getAcceptedContacts(currentUser.id);
+          if (connections) {
+              const connectedIds = new Set(connections.map(c => c.id));
+              if (currentUser.department_id && deptMembers.length > 0) {
+                  deptMembers.forEach(d => connectedIds.add(d.id));
+              }
+              const uniqueContacts = connections.filter(c => connectedIds.has(c.id));
+              setContacts(uniqueContacts);
+              setAllUsers([]);
+          }
+        } else {
+          const { data: all } = await chatService.getAllUsers();
+          if (all) {
+              setAllUsers(all.filter(u => u.id !== currentUser.id));
+          }
+        }
+      }
     } catch (err) {
       console.error('[Chat] fetchData 异常:', err);
     } finally {
@@ -149,10 +185,35 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
   };
 
   const handleDeepSearch = async () => {
+    if (!userSearchTerm.trim()) return;
+    
     setSearching(true);
-    const { data } = await chatService.searchGlobalEntities(userSearchTerm);
+    console.log('[Chat] 开始搜索:', userSearchTerm);
+    
+    const { data, error } = await chatService.searchGlobalEntities(userSearchTerm);
+    
+    if (error) {
+      console.error('[Chat] 搜索错误:', error);
+    }
+    
     if (data) {
-        setSearchResults(data.filter(u => u.id !== currentUser.id));
+      console.log('[Chat] 搜索结果数量:', data.length, data);
+      
+      if (currentUser.role === 'admin') {
+        // 管理员可以搜索全部用户
+        const filtered = data.filter(u => u.id !== currentUser.id);
+        console.log('[Chat] 管理员过滤后结果:', filtered.length);
+        setSearchResults(filtered);
+      } else if (currentUser.role === 'client' || currentUser.role === 'user') {
+        // 客户只能看到与自己 client_id 相同的用户
+        const myClientUsers = data.filter(u => u.client_id === currentUser.client_id);
+        setSearchResults(myClientUsers.filter(u => u.id !== currentUser.id));
+      } else {
+        setSearchResults([]);
+      }
+    } else {
+      console.log('[Chat] 搜索返回空数据');
+      setSearchResults([]);
     }
     setSearching(false);
   };
@@ -243,8 +304,8 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
       <div className="bg-white w-full max-w-6xl h-[85vh] rounded-[3rem] shadow-2xl flex overflow-hidden border border-white/20 animate-in zoom-in-95 duration-300 relative">
         
         {/* Left Sidebar: Contacts */}
-        {!tradeId && (
-        <div className="w-80 border-r border-slate-100 flex flex-col bg-slate-50/50">
+            {!tradeId && (
+            <div className="w-80 border-r border-slate-100 flex flex-col bg-slate-50/50">
             <div className="p-6 border-b border-slate-100 space-y-4">
                 <div className="flex justify-between items-center">
                     <h3 className="font-black text-slate-800 tracking-tight">业务协同中心</h3>
@@ -270,85 +331,169 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                {pendingRequests.length > 0 && (
-                    <div className="space-y-2">
-                        <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest ml-1">待确认申请 ({pendingRequests.length})</p>
-                        {pendingRequests.map(req => (
-                            <div key={req.id} className="bg-white p-4 rounded-2xl border border-amber-200 shadow-sm flex items-center justify-between animate-pulse">
-                                <div className="overflow-hidden">
-                                    <p className="font-bold text-xs text-slate-800 truncate">{req.requester?.full_name}</p>
-                                    <p className="text-[8px] text-amber-600 font-bold">新业务申请</p>
+                <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                    {/* 管理员分类显示 */}
+                    {currentUser.role === 'admin' && (
+                        <>
+                            {orgStructure.length > 0 && (
+                                <div className="space-y-2">
+                                    <p className="text-[10px] font-black text-purple-600 uppercase tracking-widest ml-1">集团架构 ({orgStructure.length})</p>
+                                    {orgStructure.map(u => (
+                                        <div 
+                                            key={u.id}
+                                            onClick={() => setSelectedUserId(u.id)}
+                                            className={`p-4 rounded-[1.5rem] cursor-pointer transition-all flex items-center gap-4 ${selectedUserId === u.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'hover:bg-white hover:shadow-sm text-slate-600'}`}
+                                        >
+                                            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm ${selectedUserId === u.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                {(u.full_name || u.username || 'U').substring(0, 1).toUpperCase()}
+                                            </div>
+                                            <div className="flex-1 overflow-hidden">
+                                                <p className="font-bold text-sm truncate">{u.full_name || u.username}</p>
+                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                    <span className={`w-1.5 h-1.5 rounded-full ${u.role === 'client' ? 'bg-emerald-400' : 'bg-blue-400'}`}></span>
+                                                    <p className={`text-[9px] uppercase tracking-tighter font-black opacity-60 ${selectedUserId === u.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                                        {u.role === 'client' ? '外部客商' : '内部团队'}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
-                                <button onClick={() => handleAcceptRequest(req.id)} className="bg-amber-500 text-white text-[10px] px-3 py-1.5 rounded-xl font-black hover:bg-amber-600 transition-colors">接受</button>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {deptMembers.length > 0 && (
-                    <div className="space-y-2">
-                        <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">我的部门 ({deptMembers.length})</p>
-                        {deptMembers.map(u => (
-                            <div 
-                                key={u.id}
-                                onClick={() => setSelectedUserId(u.id)}
-                                className={`p-4 rounded-[1.5rem] cursor-pointer transition-all flex items-center gap-4 ${selectedUserId === u.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'hover:bg-white hover:shadow-sm text-slate-600'}`}
-                            >
-                                <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm ${selectedUserId === u.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                                    {(u.full_name || u.username || 'U').substring(0, 1).toUpperCase()}
-                                </div>
-                                <div className="flex-1 overflow-hidden">
-                                    <p className="font-bold text-sm truncate">{u.full_name || u.username}</p>
-                                    <div className="flex items-center gap-1.5 mt-0.5">
-                                        <span className="w-1.5 h-1.5 rounded-full bg-green-400"></span>
-                                        <p className={`text-[9px] uppercase tracking-tighter font-black opacity-60 ${selectedUserId === u.id ? 'text-indigo-100' : 'text-slate-400'}`}>
-                                            部门同事
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                <div className="space-y-1">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-3">
-                        {currentUser.role === 'admin' ? '全集团名单' : '我的业务伙伴'}
-                    </p>
-                    {!loadingContacts && filteredContacts.length === 0 ? (
-                        <div className="text-center py-10 px-4">
-                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl grayscale opacity-20">📇</div>
-                            <p className="text-xs text-slate-400 font-bold">暂无往来联系人</p>
-                            {currentUser.role === 'admin' ? (
-                                <p className="text-[9px] text-slate-300 mt-1">请先在「用户管理」中创建账号</p>
-                            ) : (
-                                <button onClick={() => setIsAddModalOpen(true)} className="text-[10px] text-indigo-600 font-black mt-3 hover:underline">点击查找新客商</button>
                             )}
-                        </div>
-                    ) : null}
-                    {!loadingContacts && filteredContacts.map(u => (
-                            <div 
-                                key={u.id}
-                                onClick={() => setSelectedUserId(u.id)}
-                                className={`p-4 rounded-[1.5rem] cursor-pointer transition-all flex items-center gap-4 ${selectedUserId === u.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'hover:bg-white hover:shadow-sm text-slate-600'}`}
-                            >
-                                <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm ${selectedUserId === u.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                                    {(u.full_name || u.username || 'U').substring(0, 1).toUpperCase()}
+
+                            {departments.length > 0 && (
+                                <div className="space-y-2">
+                                    <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">部门管理 ({departments.length})</p>
+                                    {departments.map(u => (
+                                        <div 
+                                            key={u.id}
+                                            onClick={() => setSelectedUserId(u.id)}
+                                            className={`p-4 rounded-[1.5rem] cursor-pointer transition-all flex items-center gap-4 ${selectedUserId === u.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'hover:bg-white hover:shadow-sm text-slate-600'}`}
+                                        >
+                                            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm ${selectedUserId === u.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                {(u.full_name || u.username || 'U').substring(0, 1).toUpperCase()}
+                                            </div>
+                                            <div className="flex-1 overflow-hidden">
+                                                <p className="font-bold text-sm truncate">{u.full_name || u.username}</p>
+                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+                                                    <p className={`text-[9px] uppercase tracking-tighter font-black opacity-60 ${selectedUserId === u.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                                        部门同事
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
-                                <div className="flex-1 overflow-hidden">
-                                    <p className="font-bold text-sm truncate">{u.full_name || u.username}</p>
-                                    <div className="flex items-center gap-1.5 mt-0.5">
-                                        <span className={`w-1.5 h-1.5 rounded-full ${u.role === 'client' ? 'bg-emerald-400' : 'bg-blue-400'}`}></span>
-                                        <p className={`text-[9px] uppercase tracking-tighter font-black opacity-60 ${selectedUserId === u.id ? 'text-indigo-100' : 'text-slate-400'}`}>
-                                            {u.role === 'client' ? '外部客商' : '内部团队'}
-                                        </p>
+                            )}
+
+                            {clients.length > 0 && (
+                                <div className="space-y-2">
+                                    <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest ml-1">合作客户 ({clients.length})</p>
+                                    {clients.map(u => (
+                                        <div 
+                                            key={u.id}
+                                            onClick={() => setSelectedUserId(u.id)}
+                                            className={`p-4 rounded-[1.5rem] cursor-pointer transition-all flex items-center gap-4 ${selectedUserId === u.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'hover:bg-white hover:shadow-sm text-slate-600'}`}
+                                        >
+                                            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm ${selectedUserId === u.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                {(u.full_name || u.username || 'U').substring(0, 1).toUpperCase()}
+                                            </div>
+                                            <div className="flex-1 overflow-hidden">
+                                                <p className="font-bold text-sm truncate">{u.full_name || u.username}</p>
+                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                                                    <p className={`text-[9px] uppercase tracking-tighter font-black opacity-60 ${selectedUserId === u.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                                        外部客商
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    )}
+
+                    {/* 普通用户（非admin）显示已连接联系人 */}
+                    {currentUser.role !== 'admin' && (
+                        <>
+                            {pendingRequests.length > 0 && (
+                                <div className="space-y-2">
+                                    <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest ml-1">待确认申请 ({pendingRequests.length})</p>
+                                    {pendingRequests.map(req => (
+                                        <div key={req.id} className="bg-white p-4 rounded-2xl border border-amber-200 shadow-sm flex items-center justify-between animate-pulse">
+                                            <div className="overflow-hidden">
+                                                <p className="font-bold text-xs text-slate-800 truncate">{req.requester?.full_name}</p>
+                                                <p className="text-[8px] text-amber-600 font-bold">新业务申请</p>
+                                            </div>
+                                            <button onClick={() => handleAcceptRequest(req.id)} className="bg-amber-500 text-white text-[10px] px-3 py-1.5 rounded-xl font-black hover:bg-amber-600 transition-colors">接受</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {deptMembers.length > 0 && (
+                                <div className="space-y-2">
+                                    <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">我的部门 ({deptMembers.length})</p>
+                                    {deptMembers.map(u => (
+                                        <div 
+                                            key={u.id}
+                                            onClick={() => setSelectedUserId(u.id)}
+                                            className={`p-4 rounded-[1.5rem] cursor-pointer transition-all flex items-center gap-4 ${selectedUserId === u.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'hover:bg-white hover:shadow-sm text-slate-600'}`}
+                                        >
+                                            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm ${selectedUserId === u.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                {(u.full_name || u.username || 'U').substring(0, 1).toUpperCase()}
+                                            </div>
+                                            <div className="flex-1 overflow-hidden">
+                                                <p className="font-bold text-sm truncate">{u.full_name || u.username}</p>
+                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+                                                    <p className={`text-[9px] uppercase tracking-tighter font-black opacity-60 ${selectedUserId === u.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                                        部门同事
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <div className="space-y-1">
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-3">
+                                    {currentUser.role === 'client' ? '我的业务伙伴' : '我的业务协同人'}
+                                </p>
+                                {!loadingContacts && filteredContacts.length === 0 ? (
+                                    <div className="text-center py-10 px-4">
+                                        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl grayscale opacity-20">📇</div>
+                                        <p className="text-xs text-slate-400 font-bold">暂无往来联系人</p>
+                                        <p className="text-[9px] text-slate-300 mt-1">贸易单据建立后会自动关联业务伙伴</p>
                                     </div>
-                                </div>
+                                ) : null}
+                                {!loadingContacts && filteredContacts.map(u => (
+                                        <div 
+                                            key={u.id}
+                                            onClick={() => setSelectedUserId(u.id)}
+                                            className={`p-4 rounded-[1.5rem] cursor-pointer transition-all flex items-center gap-4 ${selectedUserId === u.id ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'hover:bg-white hover:shadow-sm text-slate-600'}`}
+                                        >
+                                            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm ${selectedUserId === u.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                                                {(u.full_name || u.username || 'U').substring(0, 1).toUpperCase()}
+                                            </div>
+                                            <div className="flex-1 overflow-hidden">
+                                                <p className="font-bold text-sm truncate">{u.full_name || u.username}</p>
+                                                <div className="flex items-center gap-1.5 mt-0.5">
+                                                    <span className={`w-1.5 h-1.5 rounded-full ${u.role === 'client' ? 'bg-emerald-400' : 'bg-blue-400'}`}></span>
+                                                    <p className={`text-[9px] uppercase tracking-tighter font-black opacity-60 ${selectedUserId === u.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                                                        {u.role === 'client' ? '外部客商' : '内部团队'}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
                             </div>
-                        ))}
+                        </>
+                    )}
                 </div>
-            </div>
         </div>
         )}
 
@@ -468,8 +613,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
                         </div>
                         <button onClick={() => setIsAddModalOpen(false)} className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center text-slate-400 hover:text-slate-600 font-black">✕</button>
                     </div>
-                    <div className="space-y-6">
-                        <div className="relative">
+                        <div className="space-y-6">
+                        <div className="flex gap-3">
+                          <div className="relative flex-1">
                             <input 
                                 type="text" 
                                 placeholder="输入对方公司全称 / 纳税识别号 (Tax ID) / 姓名..." 
@@ -483,6 +629,23 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
                                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
                                 </div>
                             )}
+                          </div>
+                          {currentUser.role === 'admin' && (
+                            <button 
+                                onClick={async () => {
+                                  setSearching(true);
+                                  const { data } = await chatService.getAllEntities();
+                                  if (data) {
+                                    console.log('[Chat] 显示所有结果:', data.length, data);
+                                    setSearchResults(data.filter(u => u.id !== currentUser.id));
+                                  }
+                                  setSearching(false);
+                                }}
+                                className="bg-slate-100 text-slate-600 text-sm font-black px-6 py-3 rounded-2xl hover:bg-slate-200 transition-all whitespace-nowrap"
+                            >
+                                显示所有
+                            </button>
+                          )}
                         </div>
                         
                         <div className="max-h-[350px] overflow-y-auto space-y-3 pr-3 scrollbar-thin">
