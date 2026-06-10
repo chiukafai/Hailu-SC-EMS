@@ -16,25 +16,25 @@ export default function SettingsManager({ currentUser }: { currentUser: any }) {
                         onClick={() => setSubTab('users')}
                         className={`px-6 py-2 rounded-xl text-sm font-black transition-all ${subTab === 'users' ? 'bg-purple-600 text-white shadow-md shadow-purple-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
-                        🔐 系统防御阵列监视
+                        👥 用户权限管理
                     </button>
                     <button 
                         onClick={() => setSubTab('assets')}
                         className={`px-6 py-2 rounded-xl text-sm font-black transition-all ${subTab === 'assets' ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
-                        ☁️ 影像资产中心
+                        📎 附件管理
                     </button>
                     <button 
                         onClick={() => setSubTab('products')}
                         className={`px-6 py-2 rounded-xl text-sm font-black transition-all ${subTab === 'products' ? 'bg-emerald-600 text-white shadow-md shadow-emerald-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
-                        📦 农产品商品库
+                        📦 商品基础信息
                     </button>
                     <button 
                         onClick={() => setSubTab('logs')}
                         className={`px-6 py-2 rounded-xl text-sm font-black transition-all ${subTab === 'logs' ? 'bg-rose-600 text-white shadow-md shadow-rose-200' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
-                        📜 中枢节点审计
+                        📜 操作日志审计
                     </button>
                 </div>
             </div>

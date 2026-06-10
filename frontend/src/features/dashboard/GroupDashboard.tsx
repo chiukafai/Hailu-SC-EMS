@@ -395,14 +395,26 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                 }, silent: false
             },
             {
-                name: '营收气泡', type: 'effectScatter', coordinateSystem: 'geo', zlevel: 10,
-                rippleEffect: { brushType: 'stroke', scale: 3 },
+                name: '营收气泡', type: 'scatter', coordinateSystem: 'geo', zlevel: 5,
                 data: stats.mapData.map(item => ({
                     name: item.name, province: item.province,
                     value: [item.coords[0], item.coords[1], item.value],
                     itemStyle: {
-                        color: PROVINCE_COLORS[item.province] || PROVINCE_COLORS.DEFAULT,
-                        shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)'
+                        color: (() => {
+                            const baseColor = PROVINCE_COLORS[item.province] || PROVINCE_COLORS.DEFAULT;
+                            if (!stats.totalRevenue || !item.value) return baseColor;
+                            const avgRevenue = stats.totalRevenue / Math.max(1, stats.mapData.length);
+                            const raw = item.value / avgRevenue;
+                            const ratio = Math.max(0, Math.min(1, (raw - 0.1) / 3));  // 0.1x~3x营收区间映射到0~1
+                            try {
+                                const c = echarts.color.parse(baseColor);
+                                const r = Math.round(c[0] + (255 - c[0]) * (1 - ratio) * 0.7);
+                                const g = Math.round(c[1] + (255 - c[1]) * (1 - ratio) * 0.7);
+                                const b = Math.round(c[2] + (255 - c[2]) * (1 - ratio) * 0.7);
+                                return `rgb(${Math.min(255,r)},${Math.min(255,g)},${Math.min(255,b)})`;
+                            } catch { return baseColor; }
+                        })(),
+                        shadowBlur: 8, shadowColor: 'rgba(0,0,0,0.25)'
                     }
                 })),
                 symbolSize: (val: any) => {
@@ -410,7 +422,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                     const ratio = val[2] / stats.totalRevenue;
                     return Math.max(10, Math.min(35, ratio * 150));
                 },
-                itemStyle: { opacity: 0.9 }
+                itemStyle: { opacity: 0.85 }
             }
         ]
     }), [stats, marketProductMap]);
@@ -424,24 +436,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                     <p className="text-slate-500 mt-1 text-sm">实时汇总全集团 100+ 经营单元贸易数据</p>
                 </div>
 
-                <div className="bg-slate-900 text-white p-4 rounded-2xl shadow-xl border border-slate-700 flex gap-6 items-center scale-90 origin-right transition-all hover:scale-100">
-                    <div className="flex flex-col">
-                        <span className="text-[9px] uppercase font-black text-slate-500 tracking-widest">物理记录</span>
-                        <span className="text-lg font-black font-mono">{stats.diagnostic.totalRecords.toString().padStart(2, '0')}</span>
-                    </div>
-                    <div className="w-px h-8 bg-slate-700"></div>
-                    <div className="flex flex-col">
-                        <span className="text-[9px] uppercase font-black text-emerald-500 tracking-widest">成功匹配</span>
-                        <span className="text-lg font-black font-mono text-emerald-400">{stats.diagnostic.matchedRecords.toString().padStart(2, '0')}</span>
-                    </div>
-                    <div className="w-px h-8 bg-slate-700"></div>
-                    <div className="flex flex-col">
-                        <span className="text-[9px] uppercase font-black text-blue-500 tracking-widest">映射率</span>
-                        <span className="text-lg font-black font-mono text-blue-400">
-                            {stats.diagnostic.totalRecords > 0 ? Math.round((stats.diagnostic.matchedRecords/stats.diagnostic.totalRecords)*100) : 0}%
-                        </span>
-                    </div>
-                </div>
+
             </div>
 
             {/* 筛选工具栏 */}

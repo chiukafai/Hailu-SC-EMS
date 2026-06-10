@@ -54,7 +54,7 @@ export default function LogManager() {
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 animate-fade-in">
             <h2 className="text-xl font-black mb-6 flex items-center gap-2 text-slate-800">
                 <span className="w-3 h-8 bg-indigo-500 rounded-lg shadow-sm"></span> 
-                系统操作审计日志
+                系统操作日志
             </h2>
 
             {/* 筛选器 */}
@@ -125,7 +125,7 @@ export default function LogManager() {
                             </tr>
                         ))}
                         {logs.length === 0 && (
-                            <tr><td colSpan={5} className="p-10 text-center text-slate-400 font-bold">暂无审计日志记录</td></tr>
+                            <tr><td colSpan={5} className="p-10 text-center text-slate-400 font-bold">暂无操作日志记录</td></tr>
                         )}
                     </tbody>
                 </table>
