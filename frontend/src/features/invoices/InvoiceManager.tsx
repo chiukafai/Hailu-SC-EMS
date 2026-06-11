@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../api/supabase';
 import * as XLSX from 'xlsx';
+import { chatService } from '../../services/chatService';
 
 export default function InvoiceManager({ permissionLevel = 'edit', currentUser }: { permissionLevel?: string, currentUser?: any }) {
     const canEdit = permissionLevel === 'edit' || permissionLevel === 'admin';
@@ -472,10 +473,16 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         if (editingId) {
             const { error } = await supabase.from('invoices').update(submitData).eq('id', editingId);
             if (error) { alert(`更新失败: ${error.message}`); return; }
+            // 自动建立好友关系
+            await chatService.autoCreateFriendFromTrade({ ...submitData, id: editingId });
         } else {
             const { data, error } = await supabase.from('invoices').insert([submitData]).select('id');
             if (error) { alert(`录入失败: ${error.message}`); return; }
-            if (data && data.length > 0) currentId = data[0].id;
+            if (data && data.length > 0) {
+                currentId = data[0].id;
+                // 自动建立好友关系
+                await chatService.autoCreateFriendFromTrade({ ...submitData, id: currentId });
+            }
         }
 
         // 同步系统附件表

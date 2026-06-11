@@ -371,7 +371,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
             }
         },
         geo: {
-            map: 'china', roam: true, zoom: 1.2,
+            map: 'china', roam: false, zoom: 1.2,
             backgroundColor: '#e8eef5',
             itemStyle: { areaColor: '#ffffff', borderColor: '#cbd5e1' },
             emphasis: { itemStyle: { areaColor: '#f1f5f9' } },
@@ -559,11 +559,11 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                 </div>
             </div>
 
-            {/* 全国营收热力透视 */}
+            {/* 全国各批发市场贸易分布 */}
             <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden mb-10">
                 <div className="p-6 border-b border-slate-50 flex justify-between items-center">
                     <div className="flex items-center gap-3">
-                        <h3 className="font-bold text-slate-800">全国营收热力透视</h3>
+                        <h3 className="font-bold text-slate-800">全国各批发市场贸易分布</h3>
                         {hasActiveFilter && (
                             <span className="bg-blue-100 text-blue-600 text-xs font-bold px-2 py-0.5 rounded-full">已筛选</span>
                         )}
