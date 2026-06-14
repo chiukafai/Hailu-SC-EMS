@@ -427,8 +427,153 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
         ]
     }), [stats, marketProductMap]);
 
+    // ── 月度营收数据（自然年 1-12 月）──
+    const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+
+    const monthlyRevenue = useMemo(() => {
+        const year = selectedYear;
+        const months: { label: string; revenue: number; count: number; prevRevenue: number }[] = [];
+        
+        for (let m = 1; m <= 12; m++) {
+            const key = `${year}-${String(m).padStart(2, '0')}`;
+            const prevKey = `${year - 1}-${String(m).padStart(2, '0')}`;
+
+            let revenue = 0, count = 0, prevRevenue = 0;
+            for (const r of rawRecords) {
+                const td = r.trade_date || '';
+                if (td.startsWith(key)) { revenue += getRevenue(r); count++; }
+                if (td.startsWith(prevKey)) { prevRevenue += getRevenue(r); }
+            }
+            months.push({ label: `${m}月`, revenue, count, prevRevenue });
+        }
+        return months;
+    }, [rawRecords, selectedYear]);
+
+    // 可选择的年份列表
+    const availableYears = useMemo(() => {
+        const years = new Set<number>();
+        for (const r of rawRecords) {
+            const y = parseInt((r.trade_date || '').substring(0, 4));
+            if (y > 2000) years.add(y);
+        }
+        return [...years].sort((a, b) => b - a);
+    }, [rawRecords]);
+
+    // ── 月度营收趋势图配置 ──
+    const monthlyChartOption = useMemo(() => {
+        const labels = monthlyRevenue.map(m => m.label);
+        const revenues = monthlyRevenue.map(m => m.revenue);
+        const prevRevenues = monthlyRevenue.map(m => m.prevRevenue);
+        const growthRates = monthlyRevenue.map((m, i) => {
+            if (m.prevRevenue === 0) return null;
+            return parseFloat((((m.revenue - m.prevRevenue) / m.prevRevenue) * 100).toFixed(1));
+        });
+
+        return {
+            tooltip: {
+                trigger: 'axis',
+                backgroundColor: 'rgba(255,255,255,0.97)',
+                borderColor: '#e2e8f0',
+                textStyle: { color: '#0f172a', fontSize: 12 },
+                formatter: (params: any) => {
+                    const month = params[0]?.axisValue || '';
+                    const rev = params.find((p: any) => p.seriesName === '营收')?.value || 0;
+                    const gr = params.find((p: any) => p.seriesName === '同比增长率')?.value;
+                    return `<div style="font-weight:700">${month}</div>
+                        <div>营收：¥${rev.toLocaleString()}</div>
+                        ${gr != null ? `<div style="color:${gr >= 0 ? '#10b981' : '#ef4444'}">同比：${gr >= 0 ? '+' : ''}${gr}%</div>` : ''}`;
+                }
+            },
+            grid: { top: 60, right: 80, bottom: 30, left: 80 },
+            xAxis: { type: 'category', data: labels, axisLine: { lineStyle: { color: '#e2e8f0' } }, axisLabel: { color: '#94a3b8', fontSize: 11 } },
+            yAxis: [
+                { type: 'value', name: '营收 (元)', nameTextStyle: { color: '#94a3b8', fontSize: 10 }, axisLabel: { formatter: (v: number) => v >= 10000 ? `${(v / 10000).toFixed(0)}万` : v, color: '#94a3b8' }, splitLine: { lineStyle: { color: '#f1f5f9' } } },
+                { type: 'value', name: '增长率 (%)', nameTextStyle: { color: '#94a3b8', fontSize: 10 }, axisLabel: { formatter: '{value}%', color: '#94a3b8' }, splitLine: { show: false } }
+            ],
+            series: [
+                {
+                    name: '营收', type: 'bar', data: revenues,
+                    itemStyle: {
+                        borderRadius: [6, 6, 0, 0],
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: '#6366f1' }, { offset: 1, color: '#a5b4fc' }
+                        ])
+                    },
+                    barWidth: '50%',
+                    emphasis: { itemStyle: { color: '#4f46e5' } }
+                },
+                {
+                    name: '同比增长率', type: 'line', yAxisIndex: 1, data: growthRates,
+                    lineStyle: { color: '#f59e0b', width: 2 },
+                    itemStyle: { color: '#f59e0b' },
+                    symbol: 'circle', symbolSize: 6,
+                    markLine: {
+                        silent: true,
+                        data: [{ yAxis: 0, lineStyle: { color: '#e2e8f0', type: 'dashed' } }],
+                        label: { show: false }
+                    }
+                },
+                {
+                    name: '去年同期', type: 'line', data: prevRevenues,
+                    lineStyle: { color: '#cbd5e1', width: 1.5, type: 'dashed' },
+                    itemStyle: { color: '#cbd5e1' },
+                    symbol: 'none',
+                }
+            ]
+        };
+    }, [monthlyRevenue]);
+
+    // ── 品类营收环形图配置 ──
+    const donutChartOption = useMemo(() => {
+        const pieData = stats.topProducts.slice(0, 8).map((p, i) => ({
+            name: p.name,
+            value: p.amount,
+            itemStyle: {
+                color: ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#6366f1', '#f43f5e', '#14b8a6'][i],
+                shadowBlur: 20,
+                shadowOffsetX: 0,
+                shadowOffsetY: 4,
+                shadowColor: 'rgba(0,0,0,0.15)'
+            }
+        }));
+        const otherAmt = stats.totalRevenue - pieData.reduce((s, p) => s + p.value, 0);
+        if (otherAmt > 0 && stats.topProducts.length > 8) {
+            pieData.push({ name: '其他品类', value: otherAmt, itemStyle: { color: '#cbd5e1', shadowBlur: 10, shadowOffsetX: 0, shadowOffsetY: 2, shadowColor: 'rgba(0,0,0,0.1)' } });
+        }
+
+        return {
+            tooltip: {
+                trigger: 'item',
+                formatter: (p: any) => `<span style="font-weight:700">${p.name}</span><br/>¥${p.value.toLocaleString()}（${p.percent}%）`
+            },
+            legend: {
+                orient: 'horizontal', bottom: 60,
+                textStyle: { color: '#475569', fontSize: 13, fontWeight: 600 },
+                itemWidth: 10, itemHeight: 10, itemGap: 14,
+            },
+            series: [{
+                type: 'pie',
+                radius: ['45%', '70%'],
+                center: ['50%', '42%'],
+                avoidLabelOverlap: false,
+                itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 3 },
+                label: { show: false },
+                emphasis: {
+                    label: { show: true, fontSize: 14, fontWeight: 'bold' },
+                    scaleSize: 10,
+                    itemStyle: { shadowBlur: 30, shadowColor: 'rgba(0,0,0,0.25)' }
+                },
+                emphasis: {
+                    label: { show: true, fontSize: 14, fontWeight: 'bold' },
+                    scaleSize: 8
+                },
+                data: pieData
+            }]
+        };
+    }, [stats]);
+
     return (
-        <div className="p-8 max-w-7xl mx-auto animate-in fade-in duration-1000">
+        <div className="px-6 py-8 w-full animate-in fade-in duration-1000">
             {/* 标题栏 */}
             <div className="flex justify-between items-end mb-8 relative">
                 <div>
@@ -586,7 +731,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                         <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm">
                             <div className="bg-white p-8 rounded-3xl shadow-2xl border border-rose-100 text-center max-w-sm">
                                 <div className="text-4xl mb-4">📍</div>
-                                <h4 className="text-lg font-black text-slate-900 mb-2">匹配引擎警告</h4>
+                                <h4 className="text-lg font-black text-slate-900 mb-2">地图匹配失败</h4>
                                 <p className="text-sm text-slate-500 mb-6">
                                     {hasActiveFilter
                                         ? `筛选条件下无匹配的地理位置记录，请尝试调整筛选条件。`
@@ -600,48 +745,87 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                 </div>
             </div>
 
-            {/* Top10 商品 & Top10 公司 */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-                    <div className="p-5 border-b border-slate-50 flex justify-between items-center">
-                        <h3 className="font-bold text-slate-800 text-sm">商品营收排行</h3>
-                        <span className="text-xs text-slate-400">{stats.topProducts.length} 个品类</span>
+            {/* 月度营收趋势 */}
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden mb-10">
+                <div className="p-6 border-b border-slate-50 flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                        <h3 className="font-bold text-slate-800">月度营收趋势</h3>
+                        <select value={selectedYear} onChange={e => setSelectedYear(Number(e.target.value))}
+                            className="text-xs font-bold border border-slate-200 rounded-lg px-3 py-1.5 bg-white text-slate-600 focus:ring-2 focus:ring-indigo-200 outline-none">
+                            {availableYears.map(y => <option key={y} value={y}>{y} 年</option>)}
+                        </select>
                     </div>
-                    <div className="p-5">
+                    <span className="text-[10px] text-slate-400 font-mono">1-12月 · 同比去年</span>
+                </div>
+                <div className="p-4 h-[380px]">
+                    {monthlyRevenue.length === 0 ? (
+                        <div className="flex items-center justify-center h-full text-slate-400 text-sm">暂无数据</div>
+                    ) : (
+                        <ReactECharts option={monthlyChartOption}
+                            style={{ height: '100%', width: '100%' }}
+                            opts={{ renderer: 'canvas' }} notMerge={true} />
+                    )}
+                </div>
+            </div>
+
+            {/* 品类分布 & 市场排名 */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* 商品品类营收分布（环形图） */}
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+                    <div className="px-5 py-4 border-b border-slate-50 shrink-0">
+                        <h3 className="font-bold text-slate-800 text-sm">商品品类营收分布</h3>
+                        <span className="text-[10px] text-slate-400">{stats.topProducts.length} 个品类</span>
+                    </div>
+                    <div className="flex-1 min-h-[340px]">
+                        {stats.topProducts.length === 0 ? (
+                            <div className="flex items-center justify-center h-full text-slate-400 text-sm">暂无数据</div>
+                        ) : (
+                            <ReactECharts option={{
+                                ...donutChartOption,
+                                legend: { ...donutChartOption.legend, bottom: 0, top: undefined, orient: 'horizontal' }
+                            }}
+                                style={{ height: '100%', width: '100%' }}
+                                opts={{ renderer: 'canvas' }} notMerge={true} />
+                        )}
+                    </div>
+                </div>
+
+                {/* 前10种品类价格趋势 */}
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+                    <div className="px-5 py-4 border-b border-slate-50 shrink-0">
+                        <h3 className="font-bold text-slate-800 text-sm">前10种品类价格趋势</h3>
+                        <span className="text-[10px] text-slate-400">最高 / 最低价</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4">
                         {stats.topProducts.length === 0 ? (
                             <p className="text-center text-slate-400 text-sm py-8">暂无数据</p>
                         ) : (
-                            <div className="space-y-4">
-                                {stats.topProducts.map((item, i) => {
+                            <div className="space-y-3">
+                                {stats.topProducts.slice(0, 10).map((item, i) => {
                                     const pct = stats.totalRevenue > 0 ? (item.amount / stats.totalRevenue) * 100 : 0;
                                     const rankColors = ['text-amber-500', 'text-slate-400', 'text-amber-600'];
+                                    const barColors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#6366f1', '#f43f5e', '#14b8a6', '#06b6d4', '#eab308'];
                                     return (
                                         <div key={item.name}>
-                                            <div className="flex justify-between items-center mb-1.5">
-                                                <div className="flex items-center gap-2 min-w-0">
-                                                    <span className={`text-xs font-black w-5 shrink-0 ${i < 3 ? rankColors[i] : 'text-slate-300'}`}>{i + 1}</span>
-                                                    <span className="text-sm font-medium text-slate-700 truncate">{item.name}</span>
+                                            <div className="flex items-center gap-1.5 mb-1">
+                                                <span className={`text-[10px] font-black w-4 shrink-0 ${i < 3 ? rankColors[i] : 'text-slate-300'}`}>{i + 1}</span>
+                                                <span className="text-sm font-medium text-slate-700 truncate flex-1">{item.name}</span>
+                                                <span className="text-sm font-black text-slate-800 font-mono shrink-0">¥{item.amount.toLocaleString()}</span>
+                                            </div>
+                                            <div className="ml-[22px]">
+                                                <div className="flex items-center gap-3 mb-1">
+                                                    <span className="text-xs text-rose-500 font-medium" title={item.maxMarket || ''}>
+                                                        ↑ ¥{item.maxPrice.toFixed(2)}
+                                                    </span>
+                                                    <span className="text-xs text-emerald-500 font-medium" title={item.minMarket || ''}>
+                                                        ↓ ¥{item.minPrice.toFixed(2)}
+                                                    </span>
                                                 </div>
-                                                <span className="text-sm font-black text-slate-800 ml-3 shrink-0 font-mono">
-                                                    ¥{item.amount.toLocaleString()}
-                                                </span>
-                                            </div>
-                                            <div className="flex items-center gap-3 mb-1.5 ml-7">
-                                                <span className="text-xs text-rose-400 font-medium" title={item.maxMarket}>
-                                                    ↑ ¥{item.maxPrice.toFixed(2)}{item.maxMarket ? ` @${getAbbr(item.maxMarket)}` : ''}
-                                                </span>
-                                                <span className="text-slate-200">|</span>
-                                                <span className="text-xs text-emerald-400 font-medium" title={item.minMarket}>
-                                                    ↓ ¥{item.minPrice.toFixed(2)}{item.minMarket ? ` @${getAbbr(item.minMarket)}` : ''}
-                                                </span>
-                                            </div>
-                                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden ml-7">
-                                                <div className="h-full rounded-full transition-all duration-700"
-                                                    style={{
-                                                        width: `${pct}%`,
-                                                        backgroundColor: i === 0 ? '#3b82f6' : i === 1 ? '#6366f1' : i === 2 ? '#8b5cf6' : '#94a3b8'
-                                                    }}
-                                                />
+                                                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                                    <div className="h-full rounded-full transition-all duration-700"
+                                                        style={{ width: `${Math.max(pct, 0.5)}%`, backgroundColor: barColors[i] }}
+                                                    />
+                                                </div>
                                             </div>
                                         </div>
                                     );
@@ -651,47 +835,51 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                     </div>
                 </div>
 
-                {currentUser?.role !== 'client' && (
-                    <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-                        <div className="p-5 border-b border-slate-50 flex justify-between items-center">
-                            <h3 className="font-bold text-slate-800 text-sm">公司营收排行</h3>
-                            <span className="text-xs text-slate-400">{stats.topCompanies.length} 个公司</span>
-                        </div>
-                        <div className="p-5">
-                            {stats.topCompanies.length === 0 ? (
-                                <p className="text-center text-slate-400 text-sm py-8">暂无数据</p>
-                            ) : (
-                                <div className="space-y-3">
-                                    {stats.topCompanies.map((item, i) => {
-                                        const pct = stats.totalRevenue > 0 ? (item.amount / stats.totalRevenue) * 100 : 0;
-                                        const rankColors = ['text-emerald-500', 'text-slate-400', 'text-amber-600'];
+                {/* 批发市场交易排名 */}
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+                    <div className="px-5 py-4 border-b border-slate-50 shrink-0">
+                        <h3 className="font-bold text-slate-800 text-sm">批发市场交易排名</h3>
+                        <span className="text-[10px] text-slate-400">{stats.mapData.length} 个市场</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4">
+                        {stats.mapData.length === 0 ? (
+                            <p className="text-center text-slate-400 text-sm py-8">暂无数据</p>
+                        ) : (
+                            <div className="space-y-4">
+                                {[...stats.mapData]
+                                    .sort((a, b) => b.value - a.value)
+                                    .slice(0, 10)
+                                    .map((item, i) => {
+                                        const pct = stats.totalRevenue > 0 ? (item.value / stats.totalRevenue) * 100 : 0;
+                                        const rankColors = ['text-amber-500', 'text-slate-400', 'text-amber-600'];
+                                        const barColors = ['#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#ec4899', '#f59e0b', '#10b981', '#14b8a6', '#06b6d4', '#f97316'];
                                         return (
                                             <div key={item.name}>
-                                                <div className="flex justify-between items-center mb-1">
+                                                <div className="flex justify-between items-center mb-1.5">
                                                     <div className="flex items-center gap-2 min-w-0">
                                                         <span className={`text-xs font-black w-5 shrink-0 ${i < 3 ? rankColors[i] : 'text-slate-300'}`}>{i + 1}</span>
-                                                        <span className="text-sm font-medium text-slate-700 truncate">{item.name}</span>
+                                                        <div>
+                                                            <span className="text-sm font-medium text-slate-700 truncate">{item.name}</span>
+                                                            <span className="text-[10px] text-slate-400 ml-2">{item.city} · {item.province}</span>
+                                                        </div>
                                                     </div>
-                                                    <span className="text-sm font-black text-slate-800 ml-3 shrink-0 font-mono">
-                                                        ¥{item.amount.toLocaleString()}
+                                                    <span className="text-sm font-black text-slate-800 ml-2 shrink-0 font-mono">
+                                                        ¥{item.value.toLocaleString()}
                                                     </span>
                                                 </div>
-                                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden ml-7">
                                                     <div className="h-full rounded-full transition-all duration-700"
-                                                        style={{
-                                                            width: `${pct}%`,
-                                                            backgroundColor: i === 0 ? '#10b981' : i === 1 ? '#14b8a6' : i === 2 ? '#06b6d4' : '#94a3b8'
-                                                        }}
+                                                        style={{ width: `${Math.max(pct * 2.5, 2)}%`, backgroundColor: barColors[i] }}
                                                     />
                                                 </div>
                                             </div>
                                         );
-                                    })}
-                                </div>
-                            )}
-                        </div>
+                                    })
+                                }
+                            </div>
+                        )}
                     </div>
-                )}
+                </div>
             </div>
         </div>
     );

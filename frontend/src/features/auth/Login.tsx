@@ -46,15 +46,15 @@ export default function Login({ onLogin }: { onLogin: (user: any) => void }) {
                 
                 <form onSubmit={handleLogin} className="space-y-6">
                     <div>
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">管理账号 / Security ID</label>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">用户名</label>
                         <input type="text" className="w-full border border-slate-200 px-5 py-4 rounded-xl bg-slate-50 focus:bg-white focus:ring-4 focus:ring-blue-600/10 focus:border-blue-500 outline-none transition-all font-bold text-slate-700" value={username} onChange={e => setUsername(e.target.value)} required />
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">身份密令 / Passphrase</label>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">密码</label>
                         <input type="password" className="w-full border border-slate-200 px-5 py-4 rounded-xl bg-slate-50 focus:bg-white focus:ring-4 focus:ring-blue-600/10 focus:border-blue-500 outline-none transition-all font-bold text-slate-700" value={password} onChange={e => setPassword(e.target.value)} required />
                     </div>
                     <button type="submit" disabled={loading} className="w-full bg-slate-900 border border-black text-white font-black py-4 rounded-xl hover:bg-black hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 disabled:opacity-50 mt-4 tracking-wider">
-                        {loading ? '网络联通中...' : '安全登入网络'}
+                        {loading ? '登录中...' : '登录'}
                     </button>
                     <div className="text-center pt-4">
                         <span className="text-[10px] text-slate-300 font-mono">ENCRYPTED END-TO-END VERIFICATION</span>

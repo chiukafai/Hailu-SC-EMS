@@ -309,7 +309,7 @@ export default function DepartmentManager({ permissionLevel = 'edit' }: { permis
 
                         <div className="flex gap-2 pt-2">
                             <button onClick={handleSubmit} className={`flex-1 ${editingId ? 'bg-emerald-600 shadow-emerald-200' : 'bg-slate-900 shadow-slate-200'} text-white font-black py-4 rounded-[1.25rem] shadow-xl transition-all hover:scale-[1.01] active:scale-95`}>
-                                {editingId ? '💾 固化架构并同步' : '📜 确认编制并生效'}
+                                {editingId ? '💾 保存并同步' : '📜 创建部门'}
                             </button>
                             {editingId && <button onClick={resetForm} className="px-6 py-4 bg-slate-100 text-slate-500 rounded-[1.25rem] font-bold hover:bg-slate-200 transition-colors">取消</button>}
                         </div>

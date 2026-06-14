@@ -102,7 +102,7 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
         if (editingId) {
             const { error } = await supabase.from('app_users').update(submitData).eq('id', editingId);
             if (error) alert(error.message);
-            else { alert('账号凭证更新成功'); setEditingId(null); fetchUsers(); }
+            else { alert('用户信息更新成功'); setEditingId(null); fetchUsers(); }
         } else {
             // Prevent duplicate username
             const { data: existingUser } = await supabase
@@ -131,7 +131,7 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                 }
             }
 
-            alert('干员凭证建立成功');
+            alert('用户创建成功');
             resetForm();
             fetchUsers();
         }
@@ -139,12 +139,12 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
 
     const handleDelete = async (user: any) => {
         if (user.username === 'admin') {
-            alert('系统最终管理员 admin 不可注销！'); return;
+            alert('系统管理员 admin 不可删除！'); return;
         }
         if (user.id === currentUser.id) {
-            alert('无法注销当前操作账号！'); return;
+            alert('无法删除当前登录账号！'); return;
         }
-        if (confirm(`警告：确定将账号 [${user.full_name}] 移出防御阵列并注销凭证吗？`)) {
+        if (confirm(`确定要删除用户 [${user.full_name}] 吗？此操作不可撤销。`)) {
             await supabase.from('app_users').delete().eq('id', user.id);
             fetchUsers();
         }
@@ -188,7 +188,7 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                 <div className="flex justify-between items-center mb-8">
                     <h2 className="text-2xl font-black flex items-center gap-4 text-slate-800">
                         <span className={`w-3 h-10 ${editingId ? 'bg-amber-400' : 'bg-indigo-600'} rounded-full shadow-sm`}></span> 
-                        {editingId ? '修正干员身份信息' : '发放新在编干员凭证'}
+                        {editingId ? '编辑用户信息' : '创建新用户账号'}
                     </h2>
                     {editingId && <button onClick={resetForm} className="text-xs font-black text-amber-600 bg-amber-50 px-4 py-2 rounded-xl">放弃修改</button>}
                 </div>
@@ -224,7 +224,7 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                                             <option value={`head|${departments.find(d => d.id === formData.department_id)?.head}`}>👑 负责人: {departments.find(d => d.id === formData.department_id)?.head}</option>
                                         )}
                                         {departments.find(d => d.id === formData.department_id)?.staff?.split(',').map((s: string) => s.trim()).filter((s: string) => s).map((s: string, idx: number) => (
-                                            <option key={idx} value={`staff|${s}`}>💼 干员: {s}</option>
+                                            <option key={idx} value={`staff|${s}`}>👤 员工: {s}</option>
                                         ))}
                                         <option value="custom|">✏️ 手动录入新身份</option>
                                     </select>
@@ -253,7 +253,7 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                             <label className="block text-[11px] text-slate-400 font-black mb-2 uppercase tracking-widest">系统权限级别</label>
                             <select className="w-full border border-slate-100 p-4 rounded-2xl bg-slate-50 focus:ring-4 focus:ring-indigo-100 font-bold" value={formData.role} onChange={e => setFormData({ ...formData, role: e.target.value })} disabled={formData.username === 'admin' && !!editingId}>
                                 <option value="user">普通用户权限 (User)</option>
-                                <option value="admin">核心枢纽 (Admin)</option>
+                                <option value="admin">超级管理员 (Admin)</option>
                                 <option value="client">外部往来客商 (Client)</option>
                             </select>
                         </div>
@@ -270,7 +270,7 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                     </div>
 
                     <div className="md:col-span-2 bg-slate-50/50 p-8 rounded-[2rem] border border-slate-100">
-                        <p className="text-xs font-black text-slate-500 uppercase tracking-widest mb-6">特定功能模块干涉权限配置</p>
+                        <p className="text-xs font-black text-slate-500 uppercase tracking-widest mb-6">模块访问权限配置</p>
                         <div className="grid grid-cols-1 gap-3">
                             {ALL_MODULES.map(mod => {
                                 const currentLevel = formData.role === 'admin' ? 'edit' : (formData.permissions[mod.id] || 'none');
@@ -281,7 +281,7 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                                             {['none', 'view', 'edit'].map(lvl => (
                                                 <label key={lvl} className={`px-5 py-2.5 rounded-xl text-[10px] font-black cursor-pointer transition-all ${currentLevel === lvl ? (lvl === 'none' ? 'bg-rose-600 text-white shadow-lg' : lvl === 'view' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-emerald-600 text-white shadow-lg') : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}>
                                                     <input type="radio" className="hidden" checked={currentLevel === lvl} onChange={() => setPermission(mod.id, lvl)} disabled={formData.role === 'admin'} />
-                                                    {lvl === 'none' ? '禁止访问' : lvl === 'view' ? '仅限监视' : '读写干涉'}
+                                                    {lvl === 'none' ? '禁止访问' : lvl === 'view' ? '仅查看' : '编辑'}
                                                 </label>
                                             ))}
                                         </div>
@@ -295,21 +295,21 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                 <div className="mt-10 flex justify-end gap-4 pt-6 border-t border-slate-50">
                     <button onClick={resetForm} className="px-8 py-4 font-black text-slate-400 hover:text-slate-600 transition-colors">重置输入</button>
                     <button onClick={handleSubmit} className={`px-12 py-4 font-black tracking-widest text-white rounded-2xl shadow-2xl transition-all hover:scale-105 active:scale-95 ${editingId ? 'bg-amber-500 shadow-amber-200' : 'bg-indigo-600 shadow-indigo-200'}`}>
-                        {editingId ? '确认修正身份' : '确认录入档案'}
+                        {editingId ? '保存修改' : '确认创建'}
                     </button>
                 </div>
             </div>
 
             <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-100">
                 <h2 className="text-2xl font-black mb-8 text-slate-800 flex items-center justify-between">
-                    <span>中枢节点人员总览</span>
-                    <span className="text-xs bg-slate-100 px-4 py-2 rounded-xl text-slate-500 font-black">有效凭证总数: {users.length}</span>
+                    <span>用户管理</span>
+                    <span className="text-xs bg-slate-100 px-4 py-2 rounded-xl text-slate-500 font-black">用户总数: {users.length}</span>
                 </h2>
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="text-[11px] font-black tracking-widest text-slate-400 uppercase border-b border-slate-100">
-                                <th className="pb-4 px-4">在编干员 / 登录账号</th>
+                                <th className="pb-4 px-4">用户 / 登录账号</th>
                                 <th className="pb-4 px-4">角色分类</th>
                                 <th className="pb-4 px-4">模块访问状态</th>
                                 <th className="pb-4 px-4 text-right">管理操作</th>
@@ -329,20 +329,20 @@ export default function UserManager({ currentUser }: { currentUser: any }) {
                                     </td>
                                     <td className="py-6 px-4">
                                         <span className={`text-[10px] font-black px-3 py-1 rounded-lg ${u.role === 'admin' ? 'bg-rose-50 text-rose-600' : u.role === 'client' ? 'bg-amber-50 text-amber-600' : 'bg-indigo-50 text-indigo-600'}`}>
-                                            {u.role === 'admin' ? '核心枢纽' : u.role === 'client' ? '外部客商' : '普通用户'}
+                                            {u.role === 'admin' ? '超级管理员' : u.role === 'client' ? '外部客商' : '普通用户'}
                                         </span>
                                     </td>
                                     <td className="py-6 px-4">
                                         <div className="flex flex-wrap gap-1">
-                                            {u.role === 'admin' ? <span className="text-[10px] font-black text-emerald-600">全模块读写干涉</span> : 
+                                            {u.role === 'admin' ? <span className="text-[10px] font-black text-emerald-600">全部功能访问</span> : 
                                                 Object.keys(u.permissions || {}).length > 0 ? <span className="text-[10px] font-black text-slate-400">已配置 {Object.keys(u.permissions).length} 项权限</span> : <span className="text-[10px] text-slate-300 italic">暂无权限分配</span>
                                             }
                                         </div>
                                     </td>
                                     <td className="py-6 px-4 text-right">
                                         <div className="flex justify-end gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button onClick={() => startEdit(u)} className="text-[11px] font-black text-indigo-600 hover:underline">修正</button>
-                                            <button onClick={() => handleDelete(u)} className="text-[11px] font-black text-rose-500 hover:underline">注销</button>
+                                            <button onClick={() => startEdit(u)} className="text-[11px] font-black text-indigo-600 hover:underline">编辑</button>
+                                            <button onClick={() => handleDelete(u)} className="text-[11px] font-black text-rose-500 hover:underline">删除</button>
                                         </div>
                                     </td>
                                 </tr>

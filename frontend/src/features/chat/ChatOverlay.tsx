@@ -256,30 +256,35 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
   const handleStartChat = async (otherUser: any) => {
     const otherId = otherUser.id;
     
-    // 检查是否可以直接聊天
-    const { canChat, reason } = await chatService.canChatDirectly(currentUser.id, otherId);
-    
-    if (canChat) {
-      // 可以直接聊天，创建或切换到会话
-      const newConv: Conversation = {
-        id: otherId,
-        other_user_id: otherId,
-        other_user_name: otherUser.full_name || otherUser.username,
-        other_user_role: otherUser.role,
-        last_message: '',
-        last_message_time: new Date().toISOString(),
-        unread_count: 0
-      };
-      setSelectedConv(newConv);
-      setActiveTab('conversations');
-    } else {
-      // 需要好友申请
-      const { error } = await chatService.sendConnectionRequest(currentUser.id, otherId);
-      if (error) {
-        alert('无法发起聊天: ' + error.message);
+    try {
+      // 检查是否可以直接聊天
+      const { canChat, reason } = await chatService.canChatDirectly(currentUser.id, otherId);
+      
+      if (canChat) {
+        // 可以直接聊天，创建或切换到会话
+        const newConv: Conversation = {
+          id: otherId,
+          other_user_id: otherId,
+          other_user_name: otherUser.full_name || otherUser.username,
+          other_user_role: otherUser.role,
+          last_message: '',
+          last_message_time: new Date().toISOString(),
+          unread_count: 0
+        };
+        setSelectedConv(newConv);
+        setActiveTab('conversations');
       } else {
-        alert('已发送好友申请，请等待对方接受');
+        // 需要好友申请
+        const { error } = await chatService.sendConnectionRequest(currentUser.id, otherId);
+        if (error) {
+          alert('无法发起聊天: ' + error.message);
+        } else {
+          alert('已发送好友申请，请等待对方接受');
+        }
       }
+    } catch (err: any) {
+      console.error('[Chat] handleStartChat error:', err);
+      alert('发起聊天失败: ' + (err.message || '未知错误'));
     }
   };
 
@@ -314,18 +319,24 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ currentUser, tradeId, receive
         
         {/* ========== 左侧：标签页 + 内容 ========== */}
         <div className="w-80 border-r border-slate-100 flex flex-col bg-slate-50/50">
-          {/* 头部：用户信息 */}
+          {/* 头部：用户信息 + 退出按钮 */}
           <div className="p-6 border-b border-slate-100">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-indigo-600 text-white rounded-2xl flex items-center justify-center font-black text-sm">
-                {currentUser?.full_name?.substring(0, 1).toUpperCase() || '?'}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-indigo-600 text-white rounded-2xl flex items-center justify-center font-black text-sm">
+                  {currentUser?.full_name?.substring(0, 1).toUpperCase() || '?'}
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-800 text-sm">{currentUser?.full_name || '用户'}</h3>
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">
+                    {currentUser?.role === 'admin' ? '管理员' : currentUser?.role === 'client' ? '客户' : '员工'}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-black text-slate-800 text-sm">{currentUser?.full_name || '用户'}</h3>
-                <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">
-                  {currentUser?.role === 'admin' ? '管理员' : currentUser?.role === 'client' ? '客户' : '员工'}
-                </p>
-              </div>
+              {/* 始终可见的退出按钮 */}
+              <button onClick={onClose} className="w-9 h-9 flex items-center justify-center rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 transition-all font-black text-lg">
+                ✕
+              </button>
             </div>
             
             {/* 搜索栏（仅在会话标签页显示） */}

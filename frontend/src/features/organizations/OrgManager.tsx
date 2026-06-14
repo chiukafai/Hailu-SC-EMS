@@ -316,7 +316,7 @@ export default function OrgManager({ permissionLevel = 'edit' }: { permissionLev
                             </section>
 
                             <button onClick={handleSubmit} className={`w-full ${editingId ? 'bg-amber-600 shadow-amber-200' : 'bg-slate-900 shadow-slate-200'} text-white font-black py-4 rounded-2xl shadow-xl hover:scale-[1.01] transition-all active:scale-95`}>
-                                {editingId ? '💾 固化档案变更' : '📜 完成法理节点确权'}
+                                {editingId ? '💾 保存变更' : '📜 创建成员企业'}
                             </button>
                         </div>
                     </div>
@@ -479,7 +479,7 @@ export default function OrgManager({ permissionLevel = 'edit' }: { permissionLev
 
             {/* Print View Optimized */}
             <div className="hidden print:block p-10">
-                <h1 className="text-3xl font-black text-center mb-12 uppercase tracking-tighter italic border-b-8 border-slate-900 pb-5">海露集团成员企业档案确权总表 (官方版)</h1>
+                <h1 className="text-3xl font-black text-center mb-12 uppercase tracking-tighter italic border-b-8 border-slate-900 pb-5">海露集团成员企业档案名录</h1>
                 <table className="w-full border-collapse">
                     <thead>
                         <tr className="bg-slate-900 text-white text-[10px] uppercase font-black tracking-[0.2em] text-center">

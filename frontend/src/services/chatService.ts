@@ -171,12 +171,17 @@ export const chatService = {
       return { canChat: false, reason: '用户不存在' };
     }
     
-    // 2. 如果双方都是内部员工（role='user'），可以直接聊天（内部通信录）
+    // 2. 管理员可以直接与任何人聊天
+    if (me.role === 'admin' || other.role === 'admin') {
+      return { canChat: true, reason: '管理员权限' };
+    }
+    
+    // 3. 如果双方都是内部员工（role='user'），可以直接聊天（内部通信录）
     if (me.role === 'user' && other.role === 'user') {
       return { canChat: true, reason: '内部通信录' };
     }
     
-    // 3. 如果涉及客户，检查是否有贸易往来
+    // 4. 如果涉及客户，检查是否有贸易往来
     if (other.role === 'client' || me.role === 'client') {
       const hasTrade = await chatService.checkTradeRelation(myId, otherId);
       if (hasTrade) {

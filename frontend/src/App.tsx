@@ -114,7 +114,7 @@ export default function App() {
               </svg>
               <span className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 border-2 border-white rounded-full"></span>
             </button>
-            <button onClick={handleLogout} className="text-xs bg-slate-100 text-slate-500 font-bold px-3 py-1.5 rounded-lg hover:bg-slate-200 hover:text-slate-800 transition-colors">安全登出</button>
+            <button onClick={handleLogout} className="text-xs bg-slate-100 text-slate-500 font-bold px-3 py-1.5 rounded-lg hover:bg-slate-200 hover:text-slate-800 transition-colors">退出登录</button>
           </div>
         </div>
       </nav>

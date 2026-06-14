@@ -185,7 +185,7 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
         } else {
             const { error } = await supabase.from('global_clients').insert([submitData]);
             if (error) alert(`录入失败: ${error.message}`);
-            else { alert('全球客户档案已确权存证'); resetForm(); fetchClients(); }
+            else { alert('客户档案保存成功'); resetForm(); fetchClients(); }
         }
     };
 
@@ -453,7 +453,7 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
                                 </div>
                             </section>
                             <button onClick={handleSubmit} className="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl shadow-xl shadow-indigo-100 hover:scale-[1.01] transition-all active:scale-95">
-                                {editingId ? '💾 固化合作档案变更' : '📜 完成全球客户确权'}
+                                {editingId ? '💾 保存变更' : '📜 创建客户档案'}
                             </button>
                         </div>
                     </div>
@@ -619,7 +619,7 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
 
             {/* Print View */}
             <div className="hidden print:block p-10">
-                <h1 className="text-3xl font-black text-center mb-12 uppercase tracking-tighter italic border-b-8 border-slate-900 pb-5">海露集团合作客户确权档案 (官方核定版)</h1>
+                <h1 className="text-3xl font-black text-center mb-12 uppercase tracking-tighter italic border-b-8 border-slate-900 pb-5">海露集团合作客户档案名录</h1>
                 <table className="w-full border-collapse">
                     <thead className="bg-slate-900 text-white text-[10px] uppercase font-black tracking-[0.2em] text-center">
                         <tr>

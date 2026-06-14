@@ -95,6 +95,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
 
     const fetchData = async (page = currentPage, filters = debouncedFilters, limit = pageSize) => {
         let matchedClientTaxIds: string[] | null = null;
+        let matchedOrgIds: string[] | null = null;
         
         if (filters.client_name) {
             const { data: matchedClients } = await supabase
@@ -104,6 +105,24 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
             
             matchedClientTaxIds = matchedClients?.map(c => c.tax_id) || [];
             if (matchedClientTaxIds.length === 0) {
+               setRecords([]);
+               setTotalRecordsCount(0);
+               setAggregatedStats({ totalRevenue: 0, invoicedRevenue: 0, pendingCount: 0 });
+               return;
+            }
+        }
+
+        // 【修复】规避 invoices 表多 FK 指向 organizations 的歧义问题。
+        // 改用在 organizations 表独立查询匹配 ID，再用 in('org_id', ids) 过滤，
+        // 与 client_name 的过滤方式保持一致。
+        if (filters.org_name) {
+            const { data: matchedOrgs } = await supabase
+                .from('organizations')
+                .select('id')
+                .ilike('name', `%${filters.org_name}%`);
+            
+            matchedOrgIds = matchedOrgs?.map(o => o.id) || [];
+            if (matchedOrgIds.length === 0) {
                setRecords([]);
                setTotalRecordsCount(0);
                setAggregatedStats({ totalRevenue: 0, invoicedRevenue: 0, pendingCount: 0 });
@@ -134,7 +153,11 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         }
 
         if (filters.product_info) query = query.ilike('product_info', `%${filters.product_info}%`);
-        if (filters.org_name) query = query.ilike('organizations.name', `%${filters.org_name}%`);
+        // 【修复】主体公司搜索同时匹配甲方(org_id)和乙方(client_org_id)，确保公司无论作为哪一方都能被搜索到
+        if (matchedOrgIds && matchedOrgIds.length > 0) {
+            const ids = matchedOrgIds.join(',');
+            query = query.or(`org_id.in.(${ids}),client_org_id.in.(${ids})`);
+        }
         if (matchedClientTaxIds) query = query.in('client_tax_id', matchedClientTaxIds);
         if (filters.trade_location) query = query.ilike('trade_location', `%${filters.trade_location}%`);
         if (filters.invoice_status) query = query.eq('invoice_status', filters.invoice_status);
@@ -173,8 +196,12 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                 ? [currentUser.client_id] 
                 : matchedClientTaxIds;
 
+            // 【修复】筛选部门优先于权限部门，确保累计营收按筛选条件重新汇总
+            const effectiveDeptId = filters.department_id 
+                || ((permissionLevel === 'head' || permissionLevel === 'edit') ? (currentUser?.department_id || null) : null);
+
             const { data: stats, error: rpcError } = await supabase.rpc('get_invoice_stats', {
-                p_dept_id: (permissionLevel === 'head' || permissionLevel === 'edit') ? (currentUser?.department_id || null) : null,
+                p_dept_id: effectiveDeptId,
                 p_user_id: (permissionLevel === 'head' || permissionLevel === 'edit') && !currentUser?.department_id ? (currentUser?.id || null) : null,
                 p_product: filters.product_info || null,
                 p_org_name: filters.org_name || null,
@@ -734,7 +761,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col justify-center">
                     <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">执行中的待办节点</p>
                     <p className="text-3xl font-black mt-2 text-slate-800">
-                        {aggregatedStats.pendingCount} <span className="text-sm font-bold text-slate-400">个任务瓶颈</span>
+                        {aggregatedStats.pendingCount} <span className="text-sm font-bold text-slate-400">个待处理</span>
                     </p>
                 </div>
             </div>
