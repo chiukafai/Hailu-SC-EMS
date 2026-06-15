@@ -496,11 +496,11 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                     itemStyle: {
                         borderRadius: [6, 6, 0, 0],
                         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: '#6366f1' }, { offset: 1, color: '#a5b4fc' }
+                            { offset: 0, color: '#6c7aed' }, { offset: 1, color: '#c7d2fe' }
                         ])
                     },
                     barWidth: '50%',
-                    emphasis: { itemStyle: { color: '#4f46e5' } }
+                    emphasis: { itemStyle: { color: '#5b6be0' } }
                 },
                 {
                     name: '同比增长率', type: 'line', yAxisIndex: 1, data: growthRates,
@@ -525,20 +525,22 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
 
     // ── 品类营收环形图配置 ──
     const donutChartOption = useMemo(() => {
+        const colorPalette = ['#4f7df3', '#8b6fe8', '#e05b8c', '#e8962e', '#0da07a', '#6c5ce7', '#e04558', '#12a89d'];
+        const shadowColors = ['rgba(79,125,243,0.25)', 'rgba(139,111,232,0.25)', 'rgba(224,91,140,0.25)', 'rgba(232,150,46,0.25)', 'rgba(13,160,122,0.25)', 'rgba(108,92,231,0.25)', 'rgba(224,69,88,0.25)', 'rgba(18,168,157,0.25)'];
         const pieData = stats.topProducts.slice(0, 8).map((p, i) => ({
             name: p.name,
             value: p.amount,
             itemStyle: {
-                color: ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#6366f1', '#f43f5e', '#14b8a6'][i],
+                color: colorPalette[i],
                 shadowBlur: 20,
                 shadowOffsetX: 0,
                 shadowOffsetY: 4,
-                shadowColor: 'rgba(0,0,0,0.15)'
+                shadowColor: shadowColors[i]
             }
         }));
         const otherAmt = stats.totalRevenue - pieData.reduce((s, p) => s + p.value, 0);
         if (otherAmt > 0 && stats.topProducts.length > 8) {
-            pieData.push({ name: '其他品类', value: otherAmt, itemStyle: { color: '#cbd5e1', shadowBlur: 10, shadowOffsetX: 0, shadowOffsetY: 2, shadowColor: 'rgba(0,0,0,0.1)' } });
+            pieData.push({ name: '其他品类', value: otherAmt, itemStyle: { color: '#cbd5e1', shadowBlur: 10, shadowOffsetX: 0, shadowOffsetY: 2, shadowColor: 'rgba(148,163,184,0.15)' } });
         }
 
         return {
@@ -561,11 +563,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                 emphasis: {
                     label: { show: true, fontSize: 14, fontWeight: 'bold' },
                     scaleSize: 10,
-                    itemStyle: { shadowBlur: 30, shadowColor: 'rgba(0,0,0,0.25)' }
-                },
-                emphasis: {
-                    label: { show: true, fontSize: 14, fontWeight: 'bold' },
-                    scaleSize: 8
+                    itemStyle: { shadowBlur: 30, shadowColor: 'rgba(99,102,241,0.25)' }
                 },
                 data: pieData
             }]
@@ -577,15 +575,15 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
             {/* 标题栏 */}
             <div className="flex justify-between items-end mb-8 relative">
                 <div>
-                    <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">集团财务概览</h2>
-                    <p className="text-slate-500 mt-1 text-sm">实时汇总全集团 100+ 经营单元贸易数据</p>
+                    <h2 className="text-3xl font-extrabold text-slate-900 tracking-tighter">集团财务概览</h2>
+                    <p className="text-slate-500 mt-1 text-sm italic">实时汇总全集团 100+ 经营单元贸易数据</p>
                 </div>
 
 
             </div>
 
             {/* 筛选工具栏 */}
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mb-6">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-[0_1px_3px_rgba(99,102,241,0.06)] p-4 mb-8">
                 <div className="flex items-center gap-3 flex-wrap">
                     <div className="flex items-center gap-2">
                         <label className="text-xs font-bold text-slate-500 whitespace-nowrap">市场</label>
@@ -655,14 +653,14 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                         
                         <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div className="bg-white/[0.03] hover:bg-white/[0.07] transition-colors p-6 rounded-3xl border border-white/10 flex flex-col justify-between h-40">
-                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">我方累计交易总额</span>
+                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">我方累计交易总额</span>
                                 <div>
                                     <span className="text-4xl font-black text-indigo-400 font-mono">¥ {stats.myStats.revenue.toLocaleString()}</span>
                                     <p className="text-[10px] text-slate-500 mt-2">※ 实时汇总当前所有订单数据</p>
                                 </div>
                             </div>
                             <div className="bg-white/[0.03] hover:bg-white/[0.07] transition-colors p-6 rounded-3xl border border-white/10 flex flex-col justify-between h-40">
-                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">营收占比 / 贡献度</span>
+                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">营收占比 / 贡献度</span>
                                 <div>
                                     <span className="text-4xl font-black text-emerald-400 font-mono">
                                         {stats.totalRevenue > 0 ? ((stats.myStats.revenue / stats.totalRevenue) * 100).toFixed(2) : 0}%
@@ -678,17 +676,17 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
             )}
 
             {/* 核心指标卡片 */}
-            <div className={`grid grid-cols-1 ${currentUser?.role === 'client' ? 'md:grid-cols-4' : 'md:grid-cols-4'} gap-6 mb-10`}>
-                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{currentUser?.role === 'client' ? '全集团累计营收 (市场大盘)' : '累计营业收入'}</p>
+            <div className={`grid grid-cols-1 ${currentUser?.role === 'client' ? 'md:grid-cols-4' : 'md:grid-cols-4'} gap-8 mb-12`}>
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-[0_1px_3px_rgba(99,102,241,0.06)]">
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-wider">{currentUser?.role === 'client' ? '全集团累计营收 (市场大盘)' : '累计营业收入'}</p>
                     <p className="text-2xl font-black text-slate-900 mt-2">¥{stats.totalRevenue.toLocaleString()}</p>
                 </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{currentUser?.role === 'client' ? '我方已确权金额' : '已确认开票'}</p>
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-[0_1px_3px_rgba(99,102,241,0.06)]">
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-wider">{currentUser?.role === 'client' ? '我方已确权金额' : '已确认开票'}</p>
                     <p className="text-2xl font-black text-blue-600 mt-2">¥{(currentUser?.role === 'client' ? stats.myStats.revenue : stats.invoicedAmount).toLocaleString()}</p>
                 </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">资金结清占比</p>
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-[0_1px_3px_rgba(99,102,241,0.06)]">
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-wider">资金结清占比</p>
                     <div className="flex items-center gap-3 mt-2">
                         <p className="text-2xl font-black text-green-600">{stats.settlementRate.toFixed(1)}%</p>
                         <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
@@ -696,8 +694,8 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                         </div>
                     </div>
                 </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">风险待收金额</p>
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-[0_1px_3px_rgba(99,102,241,0.06)]">
+                    <p className="text-slate-400 text-xs font-bold uppercase tracking-wider">风险待收金额</p>
                     <p className="text-2xl font-black text-rose-500 mt-2">
                         ¥{(stats.totalRevenue - (stats.totalRevenue * (stats.settlementRate/100))).toLocaleString()}
                     </p>
@@ -705,7 +703,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
             </div>
 
             {/* 全国各批发市场贸易分布 */}
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden mb-10">
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_2px_8px_rgba(99,102,241,0.05)] overflow-hidden mb-12">
                 <div className="p-6 border-b border-slate-50 flex justify-between items-center">
                     <div className="flex items-center gap-3">
                         <h3 className="font-bold text-slate-800">全国各批发市场贸易分布</h3>
@@ -719,6 +717,10 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                     </div>
                 </div>
                 <div className="p-2 h-[750px] w-full relative bg-[#e8eef5] rounded-b-2xl overflow-hidden">
+                    {/* 极淡噪点纹理 overlay（taste-skill P2） */}
+                    <div className="absolute inset-0 pointer-events-none z-10 opacity-[0.04]" style={{
+                        backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`
+                    }}></div>
                     {loading ? (
                         <div className="flex items-center justify-center h-full text-slate-400 text-sm">加载数据中…</div>
                     ) : (
@@ -746,7 +748,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
             </div>
 
             {/* 月度营收趋势 */}
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden mb-10">
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_2px_8px_rgba(99,102,241,0.05)] overflow-hidden mb-12">
                 <div className="p-6 border-b border-slate-50 flex justify-between items-center">
                     <div className="flex items-center gap-3">
                         <h3 className="font-bold text-slate-800">月度营收趋势</h3>
@@ -769,9 +771,9 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
             </div>
 
             {/* 品类分布 & 市场排名 */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-[5fr_4fr_3fr] gap-8">
                 {/* 商品品类营收分布（环形图） */}
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_2px_8px_rgba(99,102,241,0.05)] overflow-hidden flex flex-col">
                     <div className="px-5 py-4 border-b border-slate-50 shrink-0">
                         <h3 className="font-bold text-slate-800 text-sm">商品品类营收分布</h3>
                         <span className="text-[10px] text-slate-400">{stats.topProducts.length} 个品类</span>
@@ -791,7 +793,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                 </div>
 
                 {/* 前10种品类价格趋势 */}
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_2px_8px_rgba(99,102,241,0.05)] overflow-hidden flex flex-col">
                     <div className="px-5 py-4 border-b border-slate-50 shrink-0">
                         <h3 className="font-bold text-slate-800 text-sm">前10种品类价格趋势</h3>
                         <span className="text-[10px] text-slate-400">最高 / 最低价</span>
@@ -804,7 +806,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                                 {stats.topProducts.slice(0, 10).map((item, i) => {
                                     const pct = stats.totalRevenue > 0 ? (item.amount / stats.totalRevenue) * 100 : 0;
                                     const rankColors = ['text-amber-500', 'text-slate-400', 'text-amber-600'];
-                                    const barColors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#6366f1', '#f43f5e', '#14b8a6', '#06b6d4', '#eab308'];
+                                    const barColors = ['#4f7df3', '#8b6fe8', '#e05b8c', '#d9902a', '#0da07a', '#6c5ce7', '#d94050', '#12a89d', '#3998d0', '#c8a030'];
                                     return (
                                         <div key={item.name}>
                                             <div className="flex items-center gap-1.5 mb-1">
@@ -836,7 +838,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                 </div>
 
                 {/* 批发市场交易排名 */}
-                <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+                <div className="bg-white rounded-3xl border border-slate-100 shadow-[0_2px_8px_rgba(99,102,241,0.05)] overflow-hidden flex flex-col">
                     <div className="px-5 py-4 border-b border-slate-50 shrink-0">
                         <h3 className="font-bold text-slate-800 text-sm">批发市场交易排名</h3>
                         <span className="text-[10px] text-slate-400">{stats.mapData.length} 个市场</span>
@@ -852,7 +854,7 @@ export default function GroupDashboard({ currentUser }: { currentUser?: any }) {
                                     .map((item, i) => {
                                         const pct = stats.totalRevenue > 0 ? (item.value / stats.totalRevenue) * 100 : 0;
                                         const rankColors = ['text-amber-500', 'text-slate-400', 'text-amber-600'];
-                                        const barColors = ['#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#ec4899', '#f59e0b', '#10b981', '#14b8a6', '#06b6d4', '#f97316'];
+                                        const barColors = ['#4f7df3', '#6c5ce7', '#8b6fe8', '#9d79e8', '#e05b8c', '#d9902a', '#0da07a', '#12a89d', '#3998d0', '#e07050'];
                                         return (
                                             <div key={item.name}>
                                                 <div className="flex justify-between items-center mb-1.5">

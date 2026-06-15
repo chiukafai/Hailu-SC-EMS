@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../api/supabase';
+import * as XLSX from 'xlsx';
 
 const CATEGORIES = ["蔬菜", "蛋类", "肉类", "禽类", "畜牧类", "鲜果", "其他"];
 
@@ -8,6 +9,9 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
     const [products, setProducts] = useState<any[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [importing, setImporting] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     
     const [formData, setFormData] = useState({
         name: '', sku_code: '', category: '蔬菜', origin: '', grade: '', 
@@ -79,6 +83,81 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
     const resetForm = () => {
         setEditingId(null);
         setFormData({ name: '', sku_code: '', category: '蔬菜', origin: '', grade: '', unit: '吨', description: '', image_url: '', standard_price: 0 });
+    };
+
+    // 选中切换
+    const toggleSelect = (id: string) => {
+        const next = new Set(selectedIds);
+        next.has(id) ? next.delete(id) : next.add(id);
+        setSelectedIds(next);
+    };
+
+    const toggleSelectAll = () => {
+        if (selectedIds.size === products.length) { setSelectedIds(new Set()); }
+        else { setSelectedIds(new Set(products.map(p => p.id))); }
+    };
+
+    // 批量删除
+    const handleBatchDelete = async () => {
+        if (selectedIds.size === 0) return;
+        if (!confirm(`确定要删除选中的 ${selectedIds.size} 个商品吗？此操作不可撤销！`)) return;
+        const { error } = await supabase.from('products').delete().in('id', Array.from(selectedIds));
+        if (error) alert('批量删除失败: ' + error.message);
+        else { setSelectedIds(new Set()); fetchProducts(); }
+    };
+
+    // 导出
+    const handleExport = () => {
+        const exportData = (selectedIds.size > 0 ? products.filter(p => selectedIds.has(p.id)) : products).map(p => ({
+            '商品名称': p.name,
+            'SKU编码': p.sku_code,
+            '分类': p.category,
+            '产地': p.origin,
+            '品级': p.grade,
+            '单位': p.unit,
+            '指导单价': p.standard_price,
+            '描述': p.description
+        }));
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '商品清单');
+        const label = selectedIds.size > 0 ? `选中${selectedIds.size}项` : '全部';
+        XLSX.writeFile(wb, `海露商品清单_${label}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    };
+
+    // 导入
+    const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setImporting(true);
+        try {
+            const data = await file.arrayBuffer();
+            const wb = XLSX.read(data);
+            const sheet = wb.Sheets[wb.SheetNames[0]];
+            const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+            if (rows.length === 0) { alert('未检测到有效数据'); return; }
+
+            const toInsert = rows.map(row => ({
+                name: String(row['商品名称'] || row['name'] || '').trim(),
+                sku_code: String(row['SKU编码'] || row['sku_code'] || '').trim(),
+                category: String(row['分类'] || row['category'] || '其他').trim(),
+                origin: String(row['产地'] || row['origin'] || '').trim(),
+                grade: String(row['品级'] || row['grade'] || '').trim(),
+                unit: String(row['单位'] || row['unit'] || '吨').trim(),
+                standard_price: parseFloat(row['指导单价'] || row['standard_price']) || 0,
+                description: String(row['描述'] || row['description'] || '').trim(),
+            })).filter(r => r.name);
+
+            if (toInsert.length === 0) { alert('没有合法的商品数据'); return; }
+            const { error } = await supabase.from('products').insert(toInsert);
+            if (error) alert('导入失败: ' + error.message);
+            else { alert(`成功导入 ${toInsert.length} 个商品`); fetchProducts(); }
+        } catch (err: any) {
+            alert('导入异常: ' + err.message);
+        } finally {
+            setImporting(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
     };
 
     return (
@@ -186,11 +265,32 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
             )}
 
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-                <h2 className="text-xl font-black mb-6 text-slate-800">全线农产品 SKU 资产清单</h2>
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+                    <h2 className="text-xl font-black text-slate-800">全线农产品 SKU 资产清单</h2>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        {selectedIds.size > 0 && (
+                            <button onClick={handleBatchDelete} className="bg-rose-50 text-rose-600 px-4 py-2 rounded-xl text-xs font-black border border-rose-100 hover:bg-rose-600 hover:text-white transition-all">
+                                🗑️ 删除选中 ({selectedIds.size})
+                            </button>
+                        )}
+                        <button onClick={handleExport} className="bg-blue-50 text-blue-600 px-4 py-2 rounded-xl text-xs font-black border border-blue-100 hover:bg-blue-600 hover:text-white transition-all">
+                            📤 {selectedIds.size > 0 ? `导出选中 (${selectedIds.size})` : '导出全部'}
+                        </button>
+                        {canEdit && (
+                            <label className={`px-4 py-2 rounded-xl text-xs font-black border cursor-pointer transition-all ${importing ? 'bg-slate-100 text-slate-400 border-slate-200' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}>
+                                {importing ? '⏳ 导入中...' : '📥 导入商品'}
+                                <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleImport} disabled={importing} />
+                            </label>
+                        )}
+                    </div>
+                </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm">
                         <thead>
                             <tr className="bg-slate-50 border-y border-slate-100 text-slate-500 text-xs uppercase tracking-wider">
+                                {canEdit && <th className="p-3 w-10">
+                                    <input type="checkbox" className="w-4 h-4 rounded text-emerald-600" checked={products.length > 0 && selectedIds.size === products.length} onChange={toggleSelectAll} />
+                                </th>}
                                 <th className="p-3 font-black">商品主图</th>
                                 <th className="p-3 font-black">类目与商品信息</th>
                                 <th className="p-3 font-black">规格属性 (产地/等级/单位)</th>
@@ -201,6 +301,9 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
                         <tbody className="divide-y divide-slate-50">
                             {products.map(p => (
                                 <tr key={p.id} className="hover:bg-emerald-50/30 transition-colors">
+                                    {canEdit && <td className="p-3">
+                                        <input type="checkbox" className="w-4 h-4 rounded text-emerald-600" checked={selectedIds.has(p.id)} onChange={() => toggleSelect(p.id)} />
+                                    </td>}
                                     <td className="p-3">
                                         <div className="w-12 h-12 rounded-xl border border-slate-200 bg-slate-100 overflow-hidden flex items-center justify-center flex-shrink-0 shadow-sm">
                                             {p.image_url ? <img src={p.image_url} alt={p.name} className="w-full h-full object-cover" /> : <span className="text-xs text-slate-400 font-bold">无图</span>}
@@ -236,7 +339,7 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
                                 </tr>
                             ))}
                             {products.length === 0 && (
-                                <tr><td colSpan={5} className="p-10 text-center text-slate-400 font-bold">尚未建立任何商品资产记录。</td></tr>
+                                <tr><td colSpan={canEdit ? 6 : 5} className="p-10 text-center text-slate-400 font-bold">尚未建立任何商品资产记录。</td></tr>
                             )}
                         </tbody>
                     </table>

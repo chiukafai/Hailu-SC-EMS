@@ -212,9 +212,9 @@ export default function OrgManager({ permissionLevel = 'edit' }: { permissionLev
 
     const isAllSelected = paginatedOrgs.length > 0 && paginatedOrgs.every(o => selectedIds.has(o.id));
 
-    // 导出档案数据（支持导出当前页或全部）
-    const handleExport = (scope: 'page' | 'all') => {
-        const dataToExport = scope === 'page' ? paginatedOrgs : orgs;
+    // 导出档案数据（支持导出选中项或全部）
+    const handleExport = (scope: 'selected' | 'all') => {
+        const dataToExport = scope === 'selected' ? orgs.filter(o => selectedIds.has(o.id)) : orgs;
         const exportData = dataToExport.map(org => ({
             '实体全称': org.name,
             '机构简称': org.short_name,
@@ -239,7 +239,7 @@ export default function OrgManager({ permissionLevel = 'edit' }: { permissionLev
         const ws = XLSX.utils.json_to_sheet(exportData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, '集团档案');
-        const label = scope === 'page' ? '当前页' : '全量';
+        const label = scope === 'selected' ? '选中' : '全量';
         XLSX.writeFile(wb, `海露集团档案_${label}_${new Date().toISOString().split('T')[0]}.xlsx`);
     };
 
@@ -388,10 +388,11 @@ export default function OrgManager({ permissionLevel = 'edit' }: { permissionLev
                                     📤 导出
                                     <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
                                 </button>
-                                <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-                                    <button onClick={() => handleExport('page')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2">
-                                        <span className="text-blue-500">📄</span> 导出当前页
-                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({paginatedOrgs.length})</span>
+                                <div className="absolute right-0 top-full mt-2 w-44 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                                    <button onClick={() => handleExport('selected')} disabled={selectedIds.size === 0}
+                                        className={`w-full text-left px-4 py-2.5 text-xs font-black transition-colors flex items-center gap-2 ${selectedIds.size === 0 ? 'text-slate-300 cursor-not-allowed' : 'text-slate-700 hover:bg-blue-50 hover:text-blue-700'}`}>
+                                        <span className="text-blue-500">📄</span> 导出选中企业
+                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({selectedIds.size})</span>
                                     </button>
                                     <button onClick={() => handleExport('all')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2 border-t border-slate-50">
                                         <span className="text-emerald-500">📋</span> 导出全部

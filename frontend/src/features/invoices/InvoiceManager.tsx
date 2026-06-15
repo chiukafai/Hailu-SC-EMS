@@ -15,7 +15,6 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
     
     // Batch Import Configuration States
     const [importConfigOpen, setImportConfigOpen] = useState(false);
-    const [importTargetDeptId, setImportTargetDeptId] = useState('');
     
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [searchFilters, setSearchFilters] = useState({
@@ -26,6 +25,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
     const [tradeLinks, setTradeLinks] = useState<Record<string, number>>({});
     const [attachmentsMap, setAttachmentsMap] = useState<Record<string, any[]>>({});
     const [isUploadingFile, setIsUploadingFile] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
 
     const [aggregatedStats, setAggregatedStats] = useState({ totalRevenue: 0, invoicedRevenue: 0, pendingCount: 0 });
     const [totalRecordsCount, setTotalRecordsCount] = useState(0);
@@ -455,6 +455,9 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
     };
 
     const addRecord = async () => {
+        if (submitting) return; // 防止重复点击
+        setSubmitting(true);
+        try {
         const calculatedAmount = formData.quantity * formData.unit_price;
         
         const [subType, subVal] = formData.subject_id.split(':');
@@ -530,6 +533,9 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
         alert(editingId ? '业务记录已更新' : '贸易记录已入库'); 
         resetForm(); 
         fetchData();
+        } finally {
+            setSubmitting(false);
+        }
     };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -555,7 +561,8 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                 '单价': 'unit_price',
                 '发生日期': 'trade_date',
                 '地点': 'trade_location',
-                '备注': 'notes'
+                '备注': 'notes',
+                '业务归属部门': 'department_id'
             };
 
             const recordsToInsert = jsonData.map((row, index) => {
@@ -565,7 +572,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                     amount: 0,
                     invoice_no: `批量_TR_${Date.now()}_${index}`,
                     created_by: currentUser?.id || null,
-                    department_id: importTargetDeptId || currentUser?.department_id || null,
+                    department_id: currentUser?.department_id || null,
                     invoice_handler_dept_id: allDepartments.find((d: any) => d.name === '计划中心')?.id || null,
                     cashier_handler_dept_id: allDepartments.find((d: any) => d.name === '资管中心')?.id || null
                 };
@@ -603,9 +610,9 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                     if (isFlow) newRecord.transaction_completed_date = new Date().toISOString();
                 }
 
-                // Handle Subject Detection
+                // Handle Subject Detection (支持"主体公司"和"交易主体"两种列名)
                 let detectedSubjectName = '';
-                const subjectKey = Object.keys(row).find(k => k.trim() === '主体公司');
+                const subjectKey = Object.keys(row).find(k => k.trim() === '主体公司' || k.trim() === '交易主体');
                 if (subjectKey) detectedSubjectName = String(row[subjectKey]).trim();
                 
                 if (detectedSubjectName) {
@@ -631,8 +638,41 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                     }
                 }
 
-                // Calculate amount
-                newRecord.amount = (newRecord.quantity || 0) * (newRecord.unit_price || 0);
+                // Handle department name → id mapping
+                const deptNameKey = Object.keys(row).find(k => k.trim() === '业务归属部门');
+                if (deptNameKey) {
+                    const deptName = String(row[deptNameKey]).trim();
+                    const matchedDept = allDepartments.find((d: any) => d.name === deptName);
+                    if (matchedDept) newRecord.department_id = matchedDept.id;
+                }
+
+                // Handle 发票状态 from Excel
+                const invoiceStatusKey = Object.keys(row).find(k => k.trim() === '发票状态');
+                if (invoiceStatusKey) {
+                    const statusVal = String(row[invoiceStatusKey]).trim();
+                    if (statusVal === '已开票') {
+                        newRecord.invoice_status = 'invoiced';
+                        newRecord.invoice_completed_date = new Date().toISOString();
+                    }
+                }
+
+                // Handle 资金流水状态 from Excel
+                const flowStatusKey = Object.keys(row).find(k => k.trim() === '资金流水状态');
+                if (flowStatusKey) {
+                    const flowVal = String(row[flowStatusKey]).trim();
+                    if (flowVal === '已完成' || flowVal === '已确认') {
+                        newRecord.transaction_status = 'completed';
+                        newRecord.transaction_completed_date = new Date().toISOString();
+                    }
+                }
+
+                // Calculate amount: 优先使用Excel中的交易金额，否则用 数量*单价
+                const tradeAmountKey = Object.keys(row).find(k => k.trim() === '交易金额');
+                if (tradeAmountKey && row[tradeAmountKey]) {
+                    newRecord.amount = parseFloat(String(row[tradeAmountKey])) || 0;
+                } else {
+                    newRecord.amount = (newRecord.quantity || 0) * (newRecord.unit_price || 0);
+                }
 
                 return newRecord;
             });
@@ -682,26 +722,16 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                                         <h4 className="text-sm font-black text-slate-800">批量导入流转配置</h4>
                                         <button onClick={() => setImportConfigOpen(false)} className="text-slate-400 hover:text-slate-700">✕</button>
                                     </div>
-                                    <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">请选择该批次数据的路由方向。您可以将这批数据的一键派发给财务或出纳部门进行待办。</p>
-                                    
-                                    {!currentUser?.department_id && (
-                                        <div>
-                                            <label className="block text-[10px] font-bold text-slate-400 mb-1">1. 指定业务归属部门 (总经办必填)</label>
-                                            <select className="w-full text-xs border p-2 rounded-lg outline-none focus:ring-2 focus:ring-emerald-500" value={importTargetDeptId} onChange={e => setImportTargetDeptId(e.target.value)}>
-                                                <option value="">-- 选择业务归属中心 --</option>
-                                                {allDepartments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                                            </select>
-                                        </div>
-                                    )}
+                                    <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">导入数据将自动按 Excel 中的部门列分配归属，无需手动指定单个部门。系统会自动派发开票和流水节点。</p>
                                     
                                     <div className="bg-slate-50 border border-slate-100 p-2 rounded-lg mt-2">
                                         <p className="text-[10px] text-slate-500 mb-1"><span className="text-emerald-600 font-bold">✔️ 自动流转开票节点: </span>计划中心</p>
                                         <p className="text-[10px] text-slate-500"><span className="text-emerald-600 font-bold">✔️ 自动流转流水节点: </span>资管中心</p>
                                     </div>
 
-                                    <label className={`mt-2 cursor-pointer ${isImporting || (!currentUser?.department_id && !importTargetDeptId) ? 'bg-slate-300 pointer-events-none' : 'bg-emerald-600 hover:bg-emerald-700'} text-white w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center transition-colors shadow-md`}>
-                                        {isImporting ? '处理并流转中...' : (!currentUser?.department_id && !importTargetDeptId ? '请先选择业务归属部门' : '✔️ 确认配置并上传Excel')}
-                                        <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleFileUpload} disabled={isImporting || (!currentUser?.department_id && !importTargetDeptId)} />
+                                    <label className={`mt-2 cursor-pointer ${isImporting ? 'bg-slate-300 pointer-events-none' : 'bg-emerald-600 hover:bg-emerald-700'} text-white w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center transition-colors shadow-md`}>
+                                        {isImporting ? '处理并流转中...' : '✔️ 确认配置并上传Excel'}
+                                        <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
                                     </label>
                                 </div>
                             )}
@@ -1351,8 +1381,11 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                             </div>
 
                             <div className="pt-4 pb-2">
-                                <button onClick={addRecord} className={`w-full py-4 text-white font-black rounded-xl shadow-xl transition-all flex items-center justify-center gap-2 ${editingId ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'}`}>
-                                    {editingId ? '💾 覆写更新记录' : '➕ 确认新增上链'}
+                                <button onClick={addRecord} disabled={submitting}
+                                    className={`w-full py-4 text-white font-black rounded-xl shadow-xl transition-all flex items-center justify-center gap-2 
+                                    ${submitting ? 'bg-slate-300 cursor-not-allowed shadow-none' :
+                                        editingId ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-600/20' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'}`}>
+                                    {submitting ? '⏳ 正在提交...' : (editingId ? '💾 覆写更新记录' : '➕ 确认新增上链')}
                                 </button>
                             </div>
                         </div>

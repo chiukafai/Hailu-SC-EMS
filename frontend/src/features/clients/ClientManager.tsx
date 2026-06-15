@@ -298,11 +298,11 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
 
     const isAllSelected = displayClients.length > 0 && displayClients.every(c => selectedIds.has(c.id));
 
-    // 导出客户档案数据（服务端分页模式下，"全部"需单独查询，此处当前页=displayClients）
-    const handleExport = async (scope: 'page' | 'all') => {
+    // 导出客户档案数据（支持导出选中项或全部）
+    const handleExport = async (scope: 'selected' | 'all') => {
         let dataToExport: any[];
-        if (scope === 'page') {
-            dataToExport = displayClients;
+        if (scope === 'selected') {
+            dataToExport = clients.filter(c => selectedIds.has(c.id));
         } else {
             // 导出全部：临时执行一次无分页查询（仅取数据，不限数量）
             const { data } = await supabase.from('global_clients').select('*, departments:department_id (name)');
@@ -525,16 +525,17 @@ export default function ClientManager({ currentUser, permissionLevel = 'edit' }:
                                 <input type="file" accept=".xlsx, .xls, .csv" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
                             </label>
                             )}
-                            {/* 导出按钮（默认当前页，可选全部） */}
+                            {/* 导出按钮（默认选中项，可选全部） */}
                             <div className="relative group">
                                 <button className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-2xl text-sm font-black transition-all shadow-lg shadow-blue-100 flex items-center gap-1.5">
                                     📤 导出
                                     <svg className="w-3 h-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
                                 </button>
-                                <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-                                    <button onClick={() => handleExport('page')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2">
-                                        <span className="text-blue-500">📄</span> 导出当前页
-                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({displayClients.length})</span>
+                                <div className="absolute right-0 top-full mt-2 w-44 bg-white rounded-xl shadow-xl border border-slate-100 overflow-hidden opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                                    <button onClick={() => handleExport('selected')} disabled={selectedIds.size === 0}
+                                        className={`w-full text-left px-4 py-2.5 text-xs font-black transition-colors flex items-center gap-2 ${selectedIds.size === 0 ? 'text-slate-300 cursor-not-allowed' : 'text-slate-700 hover:bg-blue-50 hover:text-blue-700'}`}>
+                                        <span className="text-blue-500">📄</span> 导出选中企业
+                                        <span className="ml-auto text-[10px] text-slate-400 font-normal">({selectedIds.size})</span>
                                     </button>
                                     <button onClick={() => handleExport('all')} className="w-full text-left px-4 py-2.5 text-xs font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition-colors flex items-center gap-2 border-t border-slate-50">
                                         <span className="text-emerald-500">📋</span> 导出全部
