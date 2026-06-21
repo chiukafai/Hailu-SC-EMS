@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../api/supabase';
 import * as XLSX from 'xlsx';
 import { chatService } from '../../services/chatService';
@@ -26,6 +26,42 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
     const [attachmentsMap, setAttachmentsMap] = useState<Record<string, any[]>>({});
     const [isUploadingFile, setIsUploadingFile] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+
+    // 商品名称 → 商品信息映射表，用于模糊匹配产品图片
+    const productMap = useMemo(() => {
+        const map: Record<string, any> = {};
+        products.forEach(p => {
+            if (p.name) {
+                map[p.name.toLowerCase()] = p;
+                // 同时索引简化名（去掉空格、括号内容等）
+                const simple = p.name.replace(/[（(].*?[）)]/g, '').replace(/[\s\u3000]+/g, '').toLowerCase();
+                if (simple !== p.name.toLowerCase()) {
+                    map[simple] = p;
+                }
+            }
+        });
+        return map;
+    }, [products]);
+
+    // 根据 product_info 文字模糊匹配商品，返回最匹配的商品对象
+    const fuzzyMatchProduct = (productInfo: string): any | null => {
+        if (!productInfo || products.length === 0) return null;
+        const query = productInfo.replace(/[（(].*?[）)]/g, '').replace(/[\s\u3000]+/g, '').toLowerCase();
+        if (!query) return null;
+        // 精确匹配
+        if (productMap[query]) return productMap[query];
+        // 包含匹配：查找产品名称包含查询文字的产品
+        for (const p of products) {
+            const pName = p.name?.replace(/[（(].*?[）)]/g, '').replace(/[\s\u3000]+/g, '').toLowerCase() || '';
+            if (pName && pName.includes(query)) return p;
+        }
+        // 反向包含：查询文字包含产品名
+        for (const p of products) {
+            const pName = p.name?.replace(/[（(].*?[）)]/g, '').replace(/[\s\u3000]+/g, '').toLowerCase() || '';
+            if (pName && query.includes(pName)) return p;
+        }
+        return null;
+    };
 
     const [aggregatedStats, setAggregatedStats] = useState({ totalRevenue: 0, invoicedRevenue: 0, pendingCount: 0 });
     const [totalRecordsCount, setTotalRecordsCount] = useState(0);
@@ -930,7 +966,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                                             {/* Product Image and Date Container (Left) */}
                                             <div className="flex flex-col items-center gap-1.5 w-14 flex-shrink-0">
                                                 {(() => {
-                                                    const linkedProd = r.product_id ? products.find(p => p.id === r.product_id) : null;
+                                                    const linkedProd = r.product_id ? products.find(p => p.id === r.product_id) : fuzzyMatchProduct(r.product_info || '');
                                                     return linkedProd && linkedProd.image_url ? (
                                                         <div className="w-12 h-12 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden cursor-pointer hover:ring-2 ring-emerald-200 transition-all shadow-sm flex-shrink-0" title="查看商品大图" onClick={() => window.open(linkedProd.image_url, '_blank')}>
                                                             <img src={linkedProd.image_url} alt={linkedProd.name} className="w-full h-full object-cover" />
@@ -980,7 +1016,7 @@ export default function InvoiceManager({ permissionLevel = 'edit', currentUser }
                                             
                                             <div className="flex items-center flex-wrap gap-2 text-[10px]">
                                                 {(() => {
-                                                    const linkedProd = r.product_id ? products.find(p => p.id === r.product_id) : null;
+                                                    const linkedProd = r.product_id ? products.find(p => p.id === r.product_id) : fuzzyMatchProduct(r.product_info || '');
                                                     return (
                                                         <div className="text-slate-500 font-medium flex items-center gap-1 bg-white border border-slate-100 px-1.5 py-0.5 rounded shadow-sm">
                                                             <span className="text-slate-700 font-bold max-w-[120px] truncate">{r.product_info || '未知商品'}</span>

@@ -1,4 +1,4 @@
-export type ExpenseType = '物流费' | '代理费' | '关税' | '检验费' | '仓储费' | '保险费' | '其他';
+export type ExpenseType = '贸易费用' | '财税费用' | '资金过夜' | '资金成本' | '贸易利润';
 export type ExpenseStatus = '待审核' | '已审核' | '已报销' | '已驳回';
 
 export interface Expense {

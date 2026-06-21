@@ -11,6 +11,7 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
     const [isUploading, setIsUploading] = useState(false);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [importing, setImporting] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
     
     const [formData, setFormData] = useState({
@@ -24,6 +25,17 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
     };
 
     useEffect(() => { fetchProducts(); }, []);
+
+    const filteredProducts = products.filter(p => {
+        if (!searchTerm.trim()) return true;
+        const q = searchTerm.toLowerCase();
+        return (
+            p.name?.toLowerCase().includes(q) ||
+            p.sku_code?.toLowerCase().includes(q) ||
+            p.category?.toLowerCase().includes(q) ||
+            p.origin?.toLowerCase().includes(q)
+        );
+    });
 
     const handleSubmit = async () => {
         if (!formData.name) return alert('商品名称不能为空');
@@ -93,8 +105,8 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
     };
 
     const toggleSelectAll = () => {
-        if (selectedIds.size === products.length) { setSelectedIds(new Set()); }
-        else { setSelectedIds(new Set(products.map(p => p.id))); }
+        if (selectedIds.size === filteredProducts.length) { setSelectedIds(new Set()); }
+        else { setSelectedIds(new Set(filteredProducts.map(p => p.id))); }
     };
 
     // 批量删除
@@ -268,6 +280,13 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
                 <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                     <h2 className="text-xl font-black text-slate-800">全线农产品 SKU 资产清单</h2>
                     <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                            type="text"
+                            placeholder="🔍 搜索商品名称、SKU、品类..."
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                            className="border border-slate-200 rounded-xl px-3 py-2 text-xs bg-slate-50 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-400 outline-none w-56 transition-all"
+                        />
                         {selectedIds.size > 0 && (
                             <button onClick={handleBatchDelete} className="bg-rose-50 text-rose-600 px-4 py-2 rounded-xl text-xs font-black border border-rose-100 hover:bg-rose-600 hover:text-white transition-all">
                                 🗑️ 删除选中 ({selectedIds.size})
@@ -289,7 +308,7 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
                         <thead>
                             <tr className="bg-slate-50 border-y border-slate-100 text-slate-500 text-xs uppercase tracking-wider">
                                 {canEdit && <th className="p-3 w-10">
-                                    <input type="checkbox" className="w-4 h-4 rounded text-emerald-600" checked={products.length > 0 && selectedIds.size === products.length} onChange={toggleSelectAll} />
+                                    <input type="checkbox" className="w-4 h-4 rounded text-emerald-600" checked={filteredProducts.length > 0 && selectedIds.size === filteredProducts.length} onChange={toggleSelectAll} />
                                 </th>}
                                 <th className="p-3 font-black">商品主图</th>
                                 <th className="p-3 font-black">类目与商品信息</th>
@@ -299,7 +318,7 @@ export default function ProductManager({ permissionLevel = 'edit' }: { permissio
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
-                            {products.map(p => (
+                            {filteredProducts.map(p => (
                                 <tr key={p.id} className="hover:bg-emerald-50/30 transition-colors">
                                     {canEdit && <td className="p-3">
                                         <input type="checkbox" className="w-4 h-4 rounded text-emerald-600" checked={selectedIds.has(p.id)} onChange={() => toggleSelect(p.id)} />
